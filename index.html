@@ -110,6 +110,28 @@
       50%, 99% { color: rgba(255, 255, 255, .3); transform: scale(1); }
     }
 
+    /* Écran d'accueil */
+    .accueil {
+      position: fixed; inset: 0; z-index: 4;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 30px; pointer-events: none;
+      background: #cfe8d8;   /* même fond que l'écran de chargement */
+      opacity: 1; transition: opacity .4s ease-out;
+    }
+    .accueil[hidden] { display: none; }
+    .accueil.parti { opacity: 0; }
+    .accueil .titre {
+      margin: 0; text-align: center;
+      font: 400 clamp(52px, 13vw, 168px)/.95 'Freckle Face', ui-sans-serif, cursive;
+      letter-spacing: .02em; color: #2ea8ff;
+      text-shadow: 0 6px 22px rgba(46, 168, 255, .28);
+    }
+    .accueil .sous-titre {
+      margin: -18px 0 0;
+      font: 600 15px/1.5 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      color: #3c5a48; opacity: .8; text-align: center; max-width: 34ch;
+    }
+
     /* Écran de victoire : voile noir puis récapitulatif */
     .fin {
       position: fixed; inset: 0; z-index: 4;
@@ -164,7 +186,7 @@
       50%  { color: #ff2d55; opacity: 1; }
       75%  { color: #ff8fb4; opacity: .25; }
     }
-    .rejouer {
+    .bouton {
       pointer-events: auto; cursor: pointer;
       border: 0; border-radius: 999px; padding: 14px 30px;
       font: 700 16px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
@@ -172,8 +194,8 @@
       box-shadow: 0 6px 20px rgba(10, 25, 16, .28);
       transition: transform .15s ease-out, background-color .15s linear;
     }
-    .rejouer:hover { transform: scale(1.06); background: #fff; }
-    .rejouer:active { transform: scale(.98); }
+    .bouton:hover { transform: scale(1.06); background: #fff; }
+    .bouton:active { transform: scale(.98); }
 
     .score .unite { opacity: .5; font-weight: 500; }
     .score .multi {
@@ -247,6 +269,11 @@
     <span class="etoile">★</span>
     <span class="etoile">★</span>
   </div>
+  <div class="accueil" id="accueil" hidden>
+    <p class="titre">Grand Theft UFO</p>
+    <p class="sous-titre">Enlevez tout le troupeau avant que les blindés ne vous abattent.</p>
+    <button class="bouton" type="button" id="demarrer">Démarrer la partie</button>
+  </div>
   <div class="fin" id="fin" hidden>
     <div class="contenu">
       <p class="titre">You won</p>
@@ -257,12 +284,12 @@
         <dt>Durée</dt><dd id="fin-duree">—</dd>
         <dt>Multiplicateur final</dt><dd id="fin-multi">—</dd>
       </dl>
-      <button class="rejouer" type="button">Relancer une partie</button>
+      <button class="bouton rejouer" type="button">Relancer une partie</button>
     </div>
   </div>
   <div class="gameover" id="gameover" hidden>
     <p class="titre">Game Over</p>
-    <button class="rejouer" type="button">Relancer une partie</button>
+    <button class="bouton rejouer" type="button">Relancer une partie</button>
   </div>
   <p class="hint">Bougez la souris — l'OVNI suit le curseur · cliquez pour allumer le faisceau</p>
   <script type="module" src="./main.js"></script>

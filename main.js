@@ -120,15 +120,30 @@ function chauffer() {
   if (framesChauffe === 0) renderer.compile(scene, camera);
   renderer.render(scene, camera);
   framesChauffe++;
-  if (assetsCharges() && framesChauffe >= 2) lancerPartie();
+  if (assetsCharges() && framesChauffe >= 2) afficherAccueil();
 }
 
-function lancerPartie() {
+// Tout est prêt : on passe la main au joueur, la scène tourne déjà derrière.
+let accueilAffiche = false;
+function afficherAccueil() {
+  if (accueilAffiche) return;
+  accueilAffiche = true;
   pret('rendu');
+
   const ecran = document.getElementById('chargement');
   ecran.classList.add('fini');
   setTimeout(() => { ecran.hidden = true; }, 500);
-  clock.start();        // chrono remis à zéro : le chargement ne compte pas
+
+  const accueil = document.getElementById('accueil');
+  accueil.hidden = false;
+  document.getElementById('demarrer').addEventListener('click', lancerPartie, { once: true });
+}
+
+function lancerPartie() {
+  const accueil = document.getElementById('accueil');
+  accueil.classList.add('parti');
+  setTimeout(() => { accueil.hidden = true; }, 450);
+  clock.start();        // chrono remis à zéro : ni chargement ni accueil comptés
   demarre = true;
 }
 
