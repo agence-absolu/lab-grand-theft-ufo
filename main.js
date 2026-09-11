@@ -95,7 +95,9 @@ const elArc = document.getElementById('chargement-arc');
 const elPourcent = document.getElementById('chargement-pourcent');
 const elMessage = document.getElementById('chargement-message');
 const PERIMETRE = 2 * Math.PI * 52;
+
 let demarre = false;
+let framesChauffe = 0;
 
 function pret(cle) {
   if (postesFaits.has(cle)) return;
@@ -107,23 +109,27 @@ function pret(cle) {
 
   const suivant = POSTES.find(([c]) => !postesFaits.has(c));
   elMessage.textContent = suivant ? suivant[1] : 'Prêt';
-
-  if (postesFaits.size === POSTES.length - 1 && !postesFaits.has('rendu')) finaliser();
 }
 
-function finaliser() {
-  // Compilation des shaders puis une image de chauffe, avant de lancer la boucle.
-  renderer.compile(scene, camera);
+const assetsCharges = () => POSTES.every(([c]) => c === 'rendu' || postesFaits.has(c));
+
+// Phase de chauffe : la boucle d'animation tourne déjà, mais elle se contente de
+// rendre la scène. On ne passe en jeu qu'une fois les assets là ET deux images
+// réellement produites — la compilation des shaders est donc derrière nous.
+function chauffer() {
+  if (framesChauffe === 0) renderer.compile(scene, camera);
   renderer.render(scene, camera);
-  requestAnimationFrame(() => {
-    pret('rendu');
-    const ecran = document.getElementById('chargement');
-    ecran.classList.add('fini');
-    setTimeout(() => { ecran.hidden = true; }, 500);
-    demarre = true;
-    clock.getDelta();                     // repart de zéro : le chrono de partie
-    // La boucle est lancée par finaliser(), une fois tous les postes prêts.   // ne compte pas le temps de chargement
-  });
+  framesChauffe++;
+  if (assetsCharges() && framesChauffe >= 2) lancerPartie();
+}
+
+function lancerPartie() {
+  pret('rendu');
+  const ecran = document.getElementById('chargement');
+  ecran.classList.add('fini');
+  setTimeout(() => { ecran.hidden = true; }, 500);
+  clock.start();        // chrono remis à zéro : le chargement ne compte pas
+  demarre = true;
 }
 
 document.fonts.ready.then(() => pret('polices'));
@@ -133,7 +139,7 @@ setTimeout(() => {
   if (demarre) return;
   const manquants = POSTES.filter(([c]) => !postesFaits.has(c)).map(([c]) => c);
   console.warn('Chargement incomplet, démarrage forcé :', manquants.join(', '));
-  finaliser();
+  for (const [c] of POSTES) pret(c);
 }, 12000);
 
 // ------------------------------------------------------------------ renderer
@@ -1586,6 +1592,8 @@ const precedente = new THREE.Vector3();
 let spin = SPIN_IDLE;
 
 function animate() {
+  if (!demarre) { chauffer(); return; }   // rien n'est piloté avant le top départ
+
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
 
@@ -1867,4 +1875,4 @@ for (const b of document.querySelectorAll('.rejouer')) {
   b.addEventListener('click', () => location.reload());
 }
 
-// La boucle est lancée par finaliser(), une fois tous les postes prêts.
+renderer.setAnimationLoop(animate);
