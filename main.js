@@ -5,7 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   demarrerMusique, arreterMusique, setTensionMusique, basculerSon,
   setVitesseUfo, demarrerZap, arreterZap, setZapProgression, mugir, majTanksAudio,
-  canon, explosion, jouerMariachi,
+  canon, explosion, jouerMariachi, reprendreMusique, taireDecor,
 } from './audio.js';
 
 // ---------------------------------------------------------------- constantes
@@ -57,7 +57,7 @@ const TEMPS_REF    = 120;   // au-delà, le bonus de rapidité est épuisé (s)
 const MALUS_TOUCHE = 0.08;  // pénalité de multiplicateur par missile encaissé
 const MALUS_MAX    = 0.6;   // pénalité cumulée maximale
 const ETOILES_MAX  = 5;     // niveau de recherche maximal
-const UFO_VIE_MAX  = 10;    // nombre de missiles encaissés avant destruction
+const UFO_VIE_MAX  = 3;     // nombre de missiles encaissés avant destruction
 const VICT_MANOEUVRE = 0.9;  // durée de la petite manoeuvre avant décollage (s)
 const VICT_MONTEE    = 1.9;  // durée de la ruée vers la caméra (s)
 const SECOUSSE_DUR = 0.9;   // durée de la secousse de caméra (s)
@@ -1244,6 +1244,7 @@ function declencherVictoire(t) {
   if (victoire >= 0 || ufoDetruit) return;
   victoire = t;
   setTensionMusique(1);      // tour d'honneur : le banjo file à pleine vitesse
+  taireDecor(1.6);           // et la plaine se tait : bourdon, moteurs, faisceau
   victoirePos = ufoPivot.position.clone();
   haloActif = false;
   ombre.visible = false;
@@ -1569,23 +1570,14 @@ const ufoMats = [];
 let ufoVie = UFO_VIE_MAX;
 let ufoDetruit = false;
 
-// Barre de vie, en haut à gauche : bleu électrique à pleine santé, rose/rouge
-// quand la soucoupe est à bout.
+// Boucliers, en haut à gauche : un par vie restante. Celui qui saute s'efface.
 const elVie = document.getElementById('vie');
-const elVieRemplissage = document.getElementById('vie-remplissage');
-const elVieValeur = document.getElementById('vie-valeur');
-const BLEU_VIE = new THREE.Color(0x2ea8ff);
-const ROUGE_VIE = new THREE.Color(0xff2d55);
-const teinteVie = new THREE.Color();
+const elBoucliers = [...document.querySelectorAll('.vie .bouclier')];
 
 function majBarreVie() {
-  const part = Math.max(0, ufoVie) / UFO_VIE_MAX;
-  // Le virage au rouge s'amorce à mi-vie et se creuse ensuite.
-  teinteVie.copy(ROUGE_VIE).lerp(BLEU_VIE, Math.min(1, part * 1.6));
-  elVieRemplissage.style.width = `${part * 100}%`;
-  elVieRemplissage.style.backgroundColor = `#${teinteVie.getHexString()}`;
-  elVieValeur.textContent = `${Math.max(0, ufoVie)} / ${UFO_VIE_MAX}`;
-  elVie.classList.toggle('critique', part > 0 && part <= 0.3);
+  const reste = Math.max(0, ufoVie);
+  elBoucliers.forEach((b, i) => b.classList.toggle('perdu', i >= reste));
+  elVie.classList.toggle('critique', reste === 1);
 }
 majBarreVie();
 
@@ -1980,8 +1972,80 @@ addEventListener('keydown', (ev) => {
   if (ev.key === 'm' || ev.key === 'M') majBoutonSon(basculerSon());
 });
 
+// Rejouer sans recharger la page : le monde est reconstruit et les compteurs
+// remis à zéro. On repart directement en jeu, sans repasser par l'écran-titre.
+function nouvellePartie() {
+  // --- écrans de fin
+  document.getElementById('gameover').hidden = true;
+  const fin = document.getElementById('fin');
+  fin.hidden = true;
+  fin.classList.remove('affiche');
+  fin.style.setProperty('--noir', 0);
+  document.querySelector('.hint').hidden = false;
+
+  // --- compteurs
+  points = 0;
+  capturees = 0;
+  touches = 0;
+  etoiles = 1;
+  elEtoiles.forEach((e, i) => {
+    e.classList.remove('neuve');
+    e.classList.toggle('acquise', i === 0);
+  });
+
+  // --- soucoupe
+  ufoVie = UFO_VIE_MAX;
+  ufoDetruit = false;
+  degatsJusqua = -1;
+  for (const { mat, base } of ufoMats) mat.color.copy(base);
+  ufoPivot.visible = true;
+  ufoPivot.scale.setScalar(1);
+  ufoPivot.position.set(0, 0, 0);
+  ufoTilt.rotation.set(0, 0, 0);
+  cible.set(0, 0, 0);
+  ombre.visible = true;
+  elVie.classList.remove('critique');
+
+  // --- faisceau
+  haloActif = false;
+  haloIntensite = 0;
+  haloFin = 0;
+  halo.visible = false;
+  tache.visible = false;
+  haloLight.intensity = 0;
+  if (zapEnCours) { arreterZap(); zapEnCours = false; }
+
+  // --- projectiles et effets en vol
+  for (const m of missiles) missilesGroup.remove(m.mesh);
+  missiles.length = 0;
+  for (const e of explosions) {
+    e.sprite.material.map.dispose();
+    e.sprite.material.dispose();
+    explosionsGroup.remove(e.sprite);
+  }
+  explosions.length = 0;
+
+  // --- état de fin de partie
+  victoire = -1;
+  victoirePos = null;
+  secousse = 0;
+  camera.position.copy(cameraBase);
+
+  // --- le monde : nouveau troupeau, nouveaux blindés, même relief
+  construireSol();
+
+  majScore(false);
+  majBarreVie();
+  majMulti();
+
+  clock.start();          // chrono et multiplicateur repartent de zéro
+  reprendreMusique();
+  setTensionMusique(0);
+  demarre = true;
+}
+
 for (const b of document.querySelectorAll('.rejouer')) {
-  b.addEventListener('click', () => location.reload());
+  b.addEventListener('click', nouvellePartie);
 }
 
 renderer.setAnimationLoop(animate);

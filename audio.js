@@ -41,6 +41,7 @@ let busBanjo = null, busDrone = null, busZap = null, busSfx = null, busTanks = n
 // Tout ce qui peut s'effacer devant une explosion passe par là.
 let busAmbiance = null;
 let ambianceCoupee = false;      // vrai une fois la partie terminée
+let decorCoupe = false;          // vrai pendant le tour d'honneur : seul le banjo reste
 const NIV_BANJO = 0.62;   // le banjo reste un fond, pas le sujet
 const DUCK_BANJO = 0.6;   // niveau relatif du banjo pendant le tir
 const DUCK_DRONE = 0.55;
@@ -288,6 +289,7 @@ function construireZap() {
 }
 
 function esquiver(actif) {
+  if (decorCoupe) return;        // le décor sonore est déjà en train de s'éteindre
   const t = ctx.currentTime;
   busBanjo.gain.setTargetAtTime(NIV_BANJO * (actif ? DUCK_BANJO : 1), t, actif ? 0.03 : 0.25);
   busDrone.gain.setTargetAtTime(actif ? DUCK_DRONE : 1, t, actif ? 0.03 : 0.25);
@@ -753,6 +755,7 @@ function reveillerAudio() {
 export function demarrerMusique() {
   if (ctx) { reveillerAudio(); return; }
   ambianceCoupee = false;
+  decorCoupe = false;
   ctx = new (window.AudioContext || window.webkitAudioContext)();
   maitre = ctx.createGain();
   maitre.gain.value = coupe ? 0 : VOLUME;
@@ -804,6 +807,40 @@ export function arreterMusique(duree = 1.2) {
   busAmbiance.gain.setValueAtTime(busAmbiance.gain.value, ctx.currentTime);
   busAmbiance.gain.linearRampToValueAtTime(0.0001, fin);
   setTimeout(() => { clearInterval(minuteur); minuteur = null; }, duree * 1000);
+}
+
+// Éteint le décor sonore — bourdon de soucoupe, moteurs, faisceau — en gardant
+// le banjo. Pour la victoire : la plaine se tait, la musique continue.
+export function taireDecor(duree = 1.6) {
+  if (!ctx) return;
+  decorCoupe = true;
+  const t = ctx.currentTime;
+  for (const bus of [busDrone, busTanks, busZap]) {
+    bus.gain.cancelScheduledValues(t);
+    bus.gain.setValueAtTime(bus.gain.value, t);
+    bus.gain.linearRampToValueAtTime(0.0001, t + duree);
+  }
+}
+
+// Relance l'ambiance après une fin de partie, sans recréer le contexte.
+export function reprendreMusique() {
+  if (!ctx) { demarrerMusique(); return; }
+  ambianceCoupee = false;
+  decorCoupe = false;
+  const maintenant = ctx.currentTime;
+  for (const bus of [busDrone, busTanks, busZap]) {
+    bus.gain.cancelScheduledValues(maintenant);
+    bus.gain.setTargetAtTime(1, maintenant, 0.08);
+  }
+  busAmbiance.gain.cancelScheduledValues(ctx.currentTime);
+  busAmbiance.gain.setTargetAtTime(1, ctx.currentTime, 0.08);
+  if (!minuteur) {
+    bpm = BPM_LENT;
+    bpmCible = BPM_LENT;
+    pas = 0;
+    prochaineNote = ctx.currentTime + 0.05;
+    minuteur = setInterval(boucle, 25);
+  }
 }
 
 export function basculerSon() {
