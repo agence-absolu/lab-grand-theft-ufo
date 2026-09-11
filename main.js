@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import {
+  demarrerMusique, arreterMusique, setTensionMusique, basculerSon,
+  setVitesseUfo, demarrerZap, arreterZap, setZapProgression, mugir, majTanksAudio,
+  canon, explosion, jouerMariachi,
+} from './audio.js';
 
 // ---------------------------------------------------------------- constantes
 const CELL         = 1.0;   // taille d'une facette -> densité lowpoly constante
@@ -136,10 +141,18 @@ function afficherAccueil() {
 
   const accueil = document.getElementById('accueil');
   accueil.hidden = false;
+
+  // Le banjo tourne déjà sous l'écran-titre, au tempo le plus lent : aucun char
+  // n'est encore en vue. Il enchaînera sans coupure sur la partie.
+  setTensionMusique(0);
+  demarrerMusique();
+
   document.getElementById('demarrer').addEventListener('click', lancerPartie, { once: true });
 }
 
 function lancerPartie() {
+  demarrerMusique();   // déjà lancé sous l'écran-titre ; cet appel ne fait que
+                       // réveiller le contexte si le navigateur l'avait suspendu
   const accueil = document.getElementById('accueil');
   accueil.classList.add('parti');
   setTimeout(() => { accueil.hidden = true; }, 450);
@@ -541,6 +554,8 @@ function placerVaches() {
     vache.userData.aspiration = THREE.MathUtils.lerp(ASPI_MAX, ASPI_MIN, resistance);
     // Une grosse vache est plus dure à enlever : elle vaut davantage (1 à 5).
     vache.userData.points = 1 + Math.round(resistance * 4);
+    vache.userData.gabarit = resistance;      // 0 = petite et aiguë, 1 = grosse et grave
+    vache.userData.prochainMeuh = 0;
     vache.userData.progres = 0;
     vache.userData.abduite = false;
 
@@ -826,10 +841,16 @@ function nouveauTank() {
 // Un char posé hors du cadre n'entre en action qu'une fois un certain nombre de
 // vaches enlevées : les renforts arrivent au rythme de la progression du joueur.
 const pointTank = new THREE.Vector3();
-function dansEcran(v, marge = 1) {
+
+// Position à l'écran en coordonnées normalisées (-1..1), centre du cadre = 0.
+function versEcran(v) {
   camera.updateMatrixWorld();
-  pointTank.copy(v).project(camera);
-  return Math.abs(pointTank.x) <= marge && Math.abs(pointTank.y) <= marge;
+  return pointTank.copy(v).project(camera);
+}
+
+function dansEcran(v, marge = 1) {
+  const e = versEcran(v);
+  return Math.abs(e.x) <= marge && Math.abs(e.y) <= marge;
 }
 
 let tanksEnAttente = 0;
@@ -1039,6 +1060,11 @@ imageExpl.onerror = () => console.error('Chargement explosion.png échoué');
 imageExpl.src = './assets/explosion.png';
 
 function exploser(position, taille = EXPL_TAILLE, duree = EXPL_DUREE) {
+  // Le son part même si la planche d'images n'est pas prête : la détonation est
+  // dosée sur l'envergure, et placée dans le stéréo comme le reste.
+  const e = versEcran(position);
+  explosion(e.x, e.y, THREE.MathUtils.clamp(taille / EXPL_TAILLE_G, 0.25, 1));
+
   if (!explTexture || !explFrames || !explFrames.length) return;
   const map = explTexture.clone();
   map.needsUpdate = true;
@@ -1209,6 +1235,7 @@ function majMissiles(dt) {
 // ------------------------------------------------------------------ victoire
 // Troupeau au complet : la soucoupe fait un dernier tour sur elle-même puis
 // fonce vers la caméra jusqu'à occulter l'écran.
+let zapEnCours = false;
 let victoire = -1;                 // instant de déclenchement, -1 si la partie court
 let victoirePos = null;            // position au moment du déclenchement
 const elFin = () => document.getElementById('fin');
@@ -1216,6 +1243,7 @@ const elFin = () => document.getElementById('fin');
 function declencherVictoire(t) {
   if (victoire >= 0 || ufoDetruit) return;
   victoire = t;
+  setTensionMusique(1);      // tour d'honneur : le banjo file à pleine vitesse
   victoirePos = ufoPivot.position.clone();
   haloActif = false;
   ombre.visible = false;
@@ -1578,6 +1606,9 @@ function encaisser() {
 }
 
 function detruireUfo() {
+  arreterMusique(1.2);
+  // Le lamento entre quand le banjo a fini de s'éteindre.
+  setTimeout(jouerMariachi, 1400);
   exploser(ufoPivot.position, EXPL_TAILLE_G, EXPL_DUREE_G);
   secousse = SECOUSSE_DUR;
   ufoDetruit = true;
@@ -1652,6 +1683,7 @@ function animate() {
   // Inclinaison dans le sens du déplacement (effet "banking").
   const v = precedente.sub(ufoPivot.position).multiplyScalar(-1 / Math.max(dt, 1e-4));
   const vitesseUFO = Math.hypot(v.x, v.z);   // vitesse horizontale, en unités/s
+  setVitesseUfo(vitesseUFO);                 // le bourdon s'ouvre avec la vitesse
   ufoTilt.rotation.z = THREE.MathUtils.lerp(ufoTilt.rotation.z, THREE.MathUtils.clamp(-v.x * 0.035, -0.35, 0.35), 0.08);
   ufoTilt.rotation.x = THREE.MathUtils.lerp(ufoTilt.rotation.x, THREE.MathUtils.clamp(v.z * 0.035, -0.35, 0.35), 0.08);
 
@@ -1666,6 +1698,11 @@ function animate() {
   haloIntensite += (haloVoulu - haloIntensite) * (1 - Math.exp(-(haloVoulu ? 14 : 7) * dt));
   const haloOn = haloIntensite > 0.002;
   halo.visible = tache.visible = haloOn;
+
+  if (haloOn !== zapEnCours) {
+    zapEnCours = haloOn;
+    if (haloOn) demarrerZap(); else arreterZap();
+  }
 
   if (haloOn) {
     const hSol = hauteur(ufoPivot.position.x, ufoPivot.position.z);
@@ -1700,11 +1737,20 @@ function animate() {
 
   // --- chars : ils manoeuvrent pour se mettre à portée, tourelle sur l'OVNI
   const limiteTank = demiEtendue - 4;
+  let tanksVisibles = 0;
+  const voixTanks = [];   // une entrée par blindé audible, pour le mixage
   for (const tk of tanks) {
     if (!tk.actif) {
       if (capturees >= seuilTank(tk)) tk.actif = true;   // son tour est venu
       else { tk.jauge.visible = false; continue; }
     }
+    const ecran = versEcran(tk.racine.position);
+    const auCadre = Math.abs(ecran.x) <= 1 && Math.abs(ecran.y) <= 1;
+    if (auCadre) tanksVisibles++;
+    // Même hors cadre, un blindé proche du bord s'entend : c'est le poids
+    // calculé dans le module audio qui décide, pas une coupure franche.
+    tk.ecranX = ecran.x;
+    tk.ecranY = ecran.y;
 
     const p = tk.racine.position;
     let dx = ufoPivot.position.x - p.x;
@@ -1737,6 +1783,8 @@ function animate() {
       const d2 = ax * ax + az * az;
       if (d2 > 0.01 && d2 < 25) { const d = Math.sqrt(d2); sx += ax / d; sz += az / d; }
     }
+
+    voixTanks.push({ x: tk.ecranX, y: tk.ecranY, marche: Math.abs(marche) });
 
     if (marche !== 0 || sx || sz) {
       p.x = THREE.MathUtils.clamp(p.x + (avant.x * marche + sx * 0.6) * TANK_VIT * dt, -limiteTank, limiteTank);
@@ -1799,8 +1847,16 @@ function animate() {
       tk.bouche.getWorldPosition(depart);
       tk.bouche.getWorldDirection(axeTir);          // renvoie le +Z monde, soit l'axe du tube
       tirer(depart, axeTir);
+      canon(tk.ecranX, tk.ecranY);
     }
   }
+  // Le banjo s'emballe à mesure que les blindés entrent dans le cadre.
+  setTensionMusique(tanks.length ? tanksVisibles / tanks.length : 0);
+  // Moteurs et chenilles : une voix par blindé, la plus proche du centre du
+  // cadre l'emporte. Les plus bruyants d'abord, les voix étant en nombre limité.
+  voixTanks.sort((a, b) => Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
+  majTanksAudio(voixTanks);
+
   majMissiles(dt);
   majExplosions(dt);
   majSecousse(dt);
@@ -1809,6 +1865,7 @@ function animate() {
 
   // --- vaches : broutage, ou abduction quand elles sont dans le faisceau
   const rFaisceau = haloOn ? RAYON_CONE * (0.55 + 0.45 * haloIntensite) : 0;
+  let abductionEnCours = 0;
   for (const v of vachesGroup.children) {
     const d = v.userData;
     if (d.abduite) continue;
@@ -1820,6 +1877,12 @@ function animate() {
       // Le faisceau gagne du terrain par à-coups : la vache résiste, cède,
       // résiste à nouveau. L'amplitude dépend de la résistance de la bête.
       const lutte = 0.55 + 0.45 * Math.sin(t * 2.6 + d.phase);
+      // Elle proteste, et recommence tant qu'elle monte.
+      if (t > d.prochainMeuh && d.progres > 0.05) {
+        mugir(d.gabarit, 0.9 + d.gabarit * 0.5);
+        d.prochainMeuh = t + 1.5 + Math.random() * 0.6;
+      }
+
       // Déplacer l'OVNI déstabilise la prise : il faut le tenir immobile.
       const frein = THREE.MathUtils.clamp(1 - vitesseUFO / VIT_RUPTURE, FREIN_MIN, 1);
       d.progres = Math.min(1, d.progres + d.aspiration * lutte * frein * dt);
@@ -1828,6 +1891,7 @@ function animate() {
     }
 
     const p = d.progres;
+    if (p > abductionEnCours) abductionEnCours = p;
     if (p <= 0) {
       // Au repos : léger balancement de broutage, déphasé pour chaque vache.
       // La hauteur du sol est réévaluée : une vache retombée après une
@@ -1874,6 +1938,9 @@ function animate() {
     }
   }
 
+  // Le zap monte dans les aigus à mesure que la bête décolle.
+  if (zapEnCours) setZapProgression(abductionEnCours);
+
   // Ombre au sol : le disque est replaqué sur le relief, sommet par sommet,
   // pour rester entièrement visible même sur une bosse ou une pente.
   const alt = ufoPivot.position.y - sol;
@@ -1895,6 +1962,24 @@ function animate() {
 
   renderer.render(scene, camera);
 }
+const elSon = document.getElementById('son');
+
+function majBoutonSon(actif) {
+  elSon.textContent = actif ? '🔊' : '🔇';
+  elSon.title = actif ? 'Couper le son' : 'Rétablir le son';
+  elSon.setAttribute('aria-pressed', String(!actif));
+}
+
+elSon.addEventListener('click', () => {
+  majBoutonSon(basculerSon());
+  elSon.blur();      // sinon la barre d'espace rejouerait le clic
+});
+
+// Raccourci clavier M, comme dans la plupart des jeux.
+addEventListener('keydown', (ev) => {
+  if (ev.key === 'm' || ev.key === 'M') majBoutonSon(basculerSon());
+});
+
 for (const b of document.querySelectorAll('.rejouer')) {
   b.addEventListener('click', () => location.reload());
 }
