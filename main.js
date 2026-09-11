@@ -135,12 +135,21 @@ function lancerPartie() {
 document.fonts.ready.then(() => pret('polices'));
 
 // Filet de sécurité : un asset qui ne répond pas ne doit pas bloquer la partie.
-setTimeout(() => {
+// Onglet en arrière-plan, les frames sont suspendues : ce n'est pas un incident,
+// on repousse l'échéance plutôt que de crier au loup.
+function surveillerChargement() {
   if (demarre) return;
-  const manquants = POSTES.filter(([c]) => !postesFaits.has(c)).map(([c]) => c);
-  console.warn('Chargement incomplet, démarrage forcé :', manquants.join(', '));
-  for (const [c] of POSTES) pret(c);
-}, 12000);
+  if (document.hidden || !assetsCharges()) {
+    if (!document.hidden) {
+      const manquants = POSTES.filter(([c]) => !postesFaits.has(c)).map(([c]) => c);
+      console.warn('Chargement incomplet, démarrage forcé :', manquants.join(', '));
+      for (const [c] of POSTES) pret(c);
+      return;
+    }
+  }
+  setTimeout(surveillerChargement, 4000);
+}
+setTimeout(surveillerChargement, 12000);
 
 // ------------------------------------------------------------------ renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });

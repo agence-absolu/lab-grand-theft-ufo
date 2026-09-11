@@ -1,7 +1,7 @@
 {
-  "name": "ufo-isometric",
+  "name": "lab-grand-theft-ufo",
   "version": "1.0.0",
-  "description": "Plaine isométrique lowpoly : abduction de vaches en soucoupe volante",
+  "description": "Grand Theft UFO — abduction de vaches en plaine isométrique lowpoly",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

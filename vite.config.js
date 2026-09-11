@@ -1,15 +1,20 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 
+// Le site est servi depuis un sous-répertoire du lab (lab.agence-absolu.com/<slug>/).
+// Le slug est le nom npm du projet : un nouveau projet cloné sur le même modèle
+// n'a donc rien à régler ici — il se déploie dans le dossier qui porte son nom.
+// BASE_PATH surcharge au besoin (racine de domaine : BASE_PATH=/).
+const { name } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const base = process.env.BASE_PATH || `/${name}/`;
+
 export default defineConfig({
-  // Chemins relatifs : le build reste ouvrable depuis n'importe quel
-  // sous-répertoire, pas seulement à la racine d'un domaine.
-  base: './',
-  server: { port: 5174, open: true },
+  base,
+  server: { open: true },
+  assetsInclude: ['**/*.glb', '**/*.gltf', '**/*.obj'],
   build: {
-    // Les bundles vont dans dist/bundle/ pour ne pas entrer en collision avec
-    // public/assets/, recopié tel quel (modèles 3D, planche d'explosions).
+    // Les bundles vont dans dist/bundle/ : dist/assets/ est déjà occupé par le
+    // contenu de public/assets (modèles 3D, planche d'explosions), recopié tel quel.
     assetsDir: 'bundle',
-    target: 'es2022',
-    sourcemap: true,
   },
 });
