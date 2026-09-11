@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UFO — plaine isométrique lowpoly</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Freckle+Face&family=Open+Sans:wght@400;600;700&display=swap">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #cfe8d8; }
+    /* Fond perdu : le canvas couvre tout le viewport, sans marge ni bord visible. */
+    canvas {
+      display: block;
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      z-index: 0;
+    }
+    .hint { z-index: 1; }
+
+    /* Compteur d'abductions */
+    .score {
+      position: fixed; top: 20px; right: 22px; z-index: 2;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px 10px 12px; border-radius: 999px;
+      background: rgba(255, 255, 255, .62);
+      box-shadow: 0 2px 10px rgba(30, 60, 45, .12);
+      font: 600 15px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif; color: #24402f;
+      user-select: none; pointer-events: none;
+      backdrop-filter: blur(6px);
+    }
+    .score .icone { font-size: 20px; line-height: 1; }
+    .score .valeur { font-variant-numeric: tabular-nums; min-width: 1.2em; text-align: right; }
+    /* Barre de vie de la soucoupe */
+    .vie {
+      position: fixed; top: 20px; left: 22px; z-index: 2;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; border-radius: 999px;
+      background: rgba(255, 255, 255, .62);
+      box-shadow: 0 2px 10px rgba(30, 60, 45, .12);
+      font: 600 13px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif; color: #24402f;
+      user-select: none; pointer-events: none;
+      backdrop-filter: blur(6px);
+    }
+    .vie .icone { font-size: 18px; line-height: 1; }
+    .vie .piste {
+      width: 150px; height: 10px; border-radius: 999px;
+      background: rgba(36, 64, 47, .16); overflow: hidden;
+    }
+    .vie .remplissage {
+      /* display:block indispensable : un span inline ignore width/height, et la
+         piste n'est pas un conteneur flex qui l'aurait blockifié. */
+      display: block;
+      height: 100%; width: 100%; border-radius: 999px;
+      background: #2ea8ff;
+      transition: width .25s ease-out, background-color .25s linear;
+    }
+    .vie .valeur { font-variant-numeric: tabular-nums; opacity: .7; min-width: 3.2em; }
+    /* Palpitation quand la soucoupe est à bout */
+    .vie.critique .remplissage { animation: pouls .7s ease-in-out infinite; }
+    @keyframes pouls { 50% { opacity: .35; } }
+
+    /* Écran de chargement */
+    .chargement {
+      position: fixed; inset: 0; z-index: 5;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 22px; background: #cfe8d8; color: #24402f;
+      transition: opacity .45s ease-out;
+    }
+    .chargement.fini { opacity: 0; pointer-events: none; }
+    .chargement[hidden] { display: none; }
+    .chargement .cadran { position: relative; width: 132px; height: 132px; }
+    .chargement svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+    .chargement .piste { fill: none; stroke: rgba(36, 64, 47, .14); stroke-width: 9; }
+    .chargement .arc {
+      fill: none; stroke: #2ea8ff; stroke-width: 9; stroke-linecap: round;
+      transition: stroke-dashoffset .3s ease-out;
+    }
+    .chargement .pourcent {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font: 700 26px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+    .chargement .message {
+      font: 600 14px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: .04em; opacity: .7; min-height: 1em;
+    }
+
+    /* Niveau de recherche, à la GTA */
+    .recherche {
+      position: fixed; top: 66px; left: 22px; z-index: 2;
+      display: flex; gap: 4px; pointer-events: none; user-select: none;
+    }
+    .recherche .etoile {
+      font-size: 26px; line-height: 1;
+      color: rgba(255, 255, 255, .3);
+      text-shadow: 0 1px 3px rgba(20, 40, 28, .45);
+      transition: color .25s linear, transform .25s ease-out;
+    }
+    .recherche .etoile.acquise { color: #ffd233; }
+    /* Une étoile fraîchement gagnée clignote, comme dans le jeu d'origine */
+    .recherche .etoile.neuve { animation: etoile-neuve 1.6s steps(1, end) 4; }
+    @keyframes etoile-neuve {
+      0%, 49%  { color: #ffd233; transform: scale(1.25); }
+      50%, 99% { color: rgba(255, 255, 255, .3); transform: scale(1); }
+    }
+
+    /* Écran de victoire : voile noir puis récapitulatif */
+    .fin {
+      position: fixed; inset: 0; z-index: 4;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; pointer-events: none;
+      background: rgb(0 0 0 / var(--noir, 0));
+    }
+    .fin[hidden] { display: none; }
+    .fin .contenu {
+      opacity: 0; transform: translateY(12px);
+      transition: opacity .6s ease-out, transform .6s ease-out;
+      display: flex; flex-direction: column; align-items: center; gap: 22px;
+      text-align: center; color: #eaf6ef;
+    }
+    .fin.affiche .contenu { opacity: 1; transform: none; }
+    .fin .titre {
+      margin: 0;
+      font: 400 clamp(46px, 11vw, 132px)/1 'Freckle Face', ui-sans-serif, cursive;
+      letter-spacing: .02em; text-transform: uppercase; color: #2ea8ff;
+      text-shadow: 0 0 34px rgba(46, 168, 255, .45);
+    }
+    .fin .recap {
+      display: grid; grid-template-columns: auto auto; gap: 10px 26px;
+      font: 500 16px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      padding: 22px 30px; border-radius: 18px;
+      background: rgba(255, 255, 255, .07);
+      border: 1px solid rgba(255, 255, 255, .12);
+    }
+    .fin .recap dt { opacity: .6; text-align: left; margin: 0; }
+    .fin .recap dd { margin: 0; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* Écran de fin */
+    .gameover {
+      position: fixed; inset: 0; z-index: 3;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 26px; pointer-events: none;
+      background: radial-gradient(closest-side, rgba(10, 20, 14, .35), rgba(10, 20, 14, 0));
+    }
+    .gameover[hidden] { display: none; }
+    .gameover .titre {
+      margin: 0;
+      font: 400 clamp(52px, 13vw, 156px)/1 'Freckle Face', ui-sans-serif, cursive;
+      letter-spacing: .02em; text-transform: uppercase;
+      color: #2ea8ff;
+      text-shadow: 0 6px 24px rgba(0, 0, 0, .35);
+      animation: gameover-teinte 1.1s steps(1, end) infinite;
+    }
+    /* Clignotement franc entre bleu électrique et rouge/rose */
+    @keyframes gameover-teinte {
+      0%   { color: #2ea8ff; opacity: 1; }
+      25%  { color: #9be8ff; opacity: .25; }
+      50%  { color: #ff2d55; opacity: 1; }
+      75%  { color: #ff8fb4; opacity: .25; }
+    }
+    .rejouer {
+      pointer-events: auto; cursor: pointer;
+      border: 0; border-radius: 999px; padding: 14px 30px;
+      font: 700 16px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      color: #10241a; background: rgba(255, 255, 255, .88);
+      box-shadow: 0 6px 20px rgba(10, 25, 16, .28);
+      transition: transform .15s ease-out, background-color .15s linear;
+    }
+    .rejouer:hover { transform: scale(1.06); background: #fff; }
+    .rejouer:active { transform: scale(.98); }
+
+    .score .unite { opacity: .5; font-weight: 500; }
+    .score .multi {
+      font-variant-numeric: tabular-nums; font-weight: 700; color: #1d6fa8;
+      background: rgba(46, 168, 255, .16); border-radius: 999px; padding: 4px 8px;
+    }
+    .score .multi.faible { color: #a8203c; background: rgba(255, 45, 85, .14); }
+    .score .petit { font-size: 15px; }
+    .score .sep { width: 1px; height: 16px; background: rgba(36, 64, 47, .18); }
+    .score .captures { font-variant-numeric: tabular-nums; opacity: .75; }
+    /* Gain flottant "+N" à chaque capture */
+    .score .gain {
+      position: absolute; right: 14px; top: 2px;
+      font-weight: 700; color: #c00018; opacity: 0;
+    }
+    .score .gain.gain-anim { animation: gain .9s ease-out; }
+    @keyframes gain {
+      0%   { opacity: 0; transform: translateY(4px) scale(.8); }
+      20%  { opacity: 1; transform: translateY(-6px) scale(1.1); }
+      100% { opacity: 0; transform: translateY(-24px) scale(1); }
+    }
+    /* Petit sursaut à chaque capture */
+    .score.pop { animation: pop .45s cubic-bezier(.2, 1.6, .4, 1); }
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      35%  { transform: scale(1.18); background: rgba(155, 232, 255, .85); }
+      100% { transform: scale(1); }
+    }
+    .hint {
+      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+      font: 13px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif; color: #3c5a48;
+      background: rgba(255,255,255,.6); padding: 8px 14px; border-radius: 999px;
+      pointer-events: none; user-select: none;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./node_modules/three/build/three.module.js",
+      "three/addons/": "./node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="chargement" id="chargement">
+    <div class="cadran">
+      <svg viewBox="0 0 132 132" aria-hidden="true">
+        <circle class="piste" cx="66" cy="66" r="52"></circle>
+        <circle class="arc" id="chargement-arc" cx="66" cy="66" r="52"
+                stroke-dasharray="326.73" stroke-dashoffset="326.73"></circle>
+      </svg>
+      <div class="pourcent" id="chargement-pourcent">0%</div>
+    </div>
+    <p class="message" id="chargement-message">Préparation…</p>
+  </div>
+  <div class="vie" id="vie">
+    <span class="icone">🛸</span>
+    <span class="piste"><span class="remplissage" id="vie-remplissage"></span></span>
+    <span class="valeur" id="vie-valeur">10 / 10</span>
+  </div>
+  <div class="score" id="score">
+    <span class="icone">🛸</span>
+    <span class="valeur" id="score-valeur">0</span>
+    <span class="unite">pts</span>
+    <span class="multi" id="score-multi">×2.0</span>
+    <span class="sep"></span>
+    <span class="icone petit">🐄</span>
+    <span class="captures" id="score-captures">0</span>
+    <span class="sep"></span>
+    <span class="icone petit">💥</span>
+    <span class="captures" id="score-touches">0</span>
+    <span class="gain" id="score-gain"></span>
+  </div>
+  <div class="recherche" id="recherche">
+    <span class="etoile">★</span>
+    <span class="etoile">★</span>
+    <span class="etoile">★</span>
+    <span class="etoile">★</span>
+    <span class="etoile">★</span>
+  </div>
+  <div class="fin" id="fin" hidden>
+    <div class="contenu">
+      <p class="titre">You won</p>
+      <dl class="recap">
+        <dt>Points</dt><dd id="fin-points">0</dd>
+        <dt>Vaches enlevées</dt><dd id="fin-captures">0</dd>
+        <dt>Missiles encaissés</dt><dd id="fin-touches">0</dd>
+        <dt>Durée</dt><dd id="fin-duree">—</dd>
+        <dt>Multiplicateur final</dt><dd id="fin-multi">—</dd>
+      </dl>
+      <button class="rejouer" type="button">Relancer une partie</button>
+    </div>
+  </div>
+  <div class="gameover" id="gameover" hidden>
+    <p class="titre">Game Over</p>
+    <button class="rejouer" type="button">Relancer une partie</button>
+  </div>
+  <p class="hint">Bougez la souris — l'OVNI suit le curseur · cliquez pour allumer le faisceau</p>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
