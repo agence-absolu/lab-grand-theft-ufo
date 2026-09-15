@@ -44,7 +44,14 @@ jobs:
 
       # vite.config.js déduit déjà la base du nom npm ; on la passe malgré tout
       # pour que le workflow reste explicite sur ce qu'il produit.
+      # Les variables VITE_* sont inlinées dans le bundle par Vite. La clé anon
+      # Supabase est publique par construction (voir HALL-OF-FAME.md) ; elle
+      # passe par les secrets pour rester hors du dépôt, pas pour être cachée
+      # du visiteur. Absentes, le classement se replie sur localStorage.
       - run: BASE_PATH="/${{ steps.meta.outputs.slug }}/" npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
       - name: Connaître le serveur
         env:

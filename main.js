@@ -7,6 +7,7 @@ import {
   setVitesseUfo, demarrerZap, arreterZap, setZapProgression, mugir, majTanksAudio,
   canon, explosion, jouerMariachi, reprendreMusique, taireDecor,
 } from './audio.js';
+import { enregistrerScore, meilleursScores, nettoyerNom, distant } from './halloffame.js';
 
 // ---------------------------------------------------------------- constantes
 const CELL         = 1.0;   // taille d'une facette -> densité lowpoly constante
@@ -1302,7 +1303,90 @@ function afficherRecap() {
   };
   for (const [id, val] of Object.entries(rempl)) document.getElementById(id).textContent = val;
   fin.classList.add('affiche');
+  proposerSignature(duree);
 }
+
+// -------------------------------------------------------------- hall of fame
+// Après le récapitulatif, le joueur signe sa performance ; le tableau d'honneur
+// prend ensuite la place du formulaire.
+const elSignature = () => document.getElementById('signature');
+const elClassement = () => document.getElementById('classement');
+let scoreDuTour = null;      // score de la partie gagnée, en attente de signature
+
+function proposerSignature(duree) {
+  scoreDuTour = { points, captures: capturees, touches, duree };
+  const form = elSignature();
+  form.hidden = false;
+  form.reset();
+  document.getElementById('signature-etat').hidden = true;
+  elClassement().hidden = true;
+  // Le champ n'est focalisé qu'une fois l'apparition du panneau terminée,
+  // sinon le navigateur fait défiler la page au milieu de la transition.
+  setTimeout(() => document.getElementById('signature-nom').focus(), 650);
+}
+
+async function afficherClassement(mien = null) {
+  const bloc = elClassement();
+  const liste = document.getElementById('classement-liste');
+  const etat = document.getElementById('classement-etat');
+  bloc.hidden = false;
+  liste.replaceChildren();
+  etat.hidden = false;
+  etat.textContent = 'Chargement du tableau d\u2019honneur…';
+
+  const lignes = await meilleursScores();
+  etat.hidden = lignes.length > 0;
+  if (!lignes.length) etat.textContent = 'Aucun score enregistré pour l\u2019instant.';
+
+  // Une seule ligne peut être mise en avant : celle qui vient d'être signée.
+  let marque = false;
+  for (const [i, l] of lignes.entries()) {
+    const li = document.createElement('li');
+    if (!marque && mien && l.nom === mien.nom && l.points === mien.points) {
+      li.classList.add('moi');
+      marque = true;
+    }
+    const rang = document.createElement('span');
+    rang.className = 'rang';
+    rang.textContent = `${i + 1}.`;
+    const nom = document.createElement('span');
+    nom.className = 'nom';
+    nom.textContent = l.nom;              // textContent : la saisie n'est jamais interprétée
+    const pts = document.createElement('span');
+    pts.className = 'pts';
+    pts.textContent = `${l.points} pts`;
+    li.append(rang, nom, pts);
+    liste.append(li);
+  }
+}
+
+document.getElementById('signature').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!scoreDuTour) return;
+
+  const champ = document.getElementById('signature-nom');
+  const bouton = e.target.querySelector('button');
+  const etat = document.getElementById('signature-etat');
+  const nom = nettoyerNom(champ.value);
+  if (!nom) { champ.focus(); return; }
+
+  champ.disabled = bouton.disabled = true;
+  etat.hidden = false;
+  etat.textContent = 'Enregistrement…';
+
+  const score = { ...scoreDuTour, nom };
+  const envoye = await enregistrerScore(score);
+  scoreDuTour = null;
+
+  elSignature().hidden = true;
+  champ.disabled = bouton.disabled = false;
+  await afficherClassement(score);
+  if (!envoye && distant) {
+    const etatC = document.getElementById('classement-etat');
+    etatC.hidden = false;
+    etatC.textContent = 'Serveur injoignable : score conservé sur cet appareil.';
+  }
+});
 
 // ------------------------------------------------------------ secousse caméra
 const cameraBase = camera.position.clone();
@@ -1981,6 +2065,9 @@ function nouvellePartie() {
   fin.hidden = true;
   fin.classList.remove('affiche');
   fin.style.setProperty('--noir', 0);
+  elSignature().hidden = false;
+  elClassement().hidden = true;
+  scoreDuTour = null;
   document.querySelector('.hint').hidden = false;
 
   // --- compteurs

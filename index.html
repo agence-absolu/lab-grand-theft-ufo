@@ -141,6 +141,48 @@
     .fin .recap dt { opacity: .6; text-align: left; margin: 0; }
     .fin .recap dd { margin: 0; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 
+    /* Hall of fame : signature puis tableau d'honneur */
+    .fin .signature {
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+      font: 500 15px/1.4 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      pointer-events: auto;
+    }
+    .fin .signature[hidden] { display: none; }
+    .fin .signature label { opacity: .75; }
+    .fin .signature .champ { display: flex; gap: 10px; }
+    .fin .signature input {
+      width: 15ch; padding: 10px 14px; border-radius: 12px;
+      font: 700 16px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      color: #eaf6ef; background: rgba(255, 255, 255, .08);
+      border: 1px solid rgba(255, 255, 255, .22);
+      user-select: text; outline-offset: 3px;
+    }
+    .fin .signature input::placeholder { color: rgba(234, 246, 239, .35); font-weight: 500; }
+    .fin .signature input:focus-visible { border-color: #2ea8ff; outline: 2px solid rgba(46, 168, 255, .5); }
+    .fin .classement {
+      width: min(420px, 86vw); padding: 20px 24px; border-radius: 18px;
+      background: rgba(255, 255, 255, .07);
+      border: 1px solid rgba(255, 255, 255, .12);
+      font: 500 15px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+    }
+    .fin .classement[hidden] { display: none; }
+    .fin .classement h2 {
+      margin: 0 0 14px;
+      font: 400 26px/1 'Freckle Face', ui-sans-serif, cursive;
+      letter-spacing: .02em; color: #2ea8ff; text-align: center;
+    }
+    .fin .classement ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+    .fin .classement li {
+      display: grid; grid-template-columns: 2ch 1fr auto; gap: 12px; align-items: baseline;
+      padding: 6px 2px; border-radius: 8px;
+    }
+    .fin .classement li .rang { opacity: .5; text-align: right; font-variant-numeric: tabular-nums; }
+    .fin .classement li .nom { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+    .fin .classement li .pts { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .fin .classement li.moi { background: rgba(46, 168, 255, .16); }
+    .fin .etat { margin: 0; font-size: 13px; opacity: .6; text-align: center; }
+    .fin .etat[hidden] { display: none; }
+
     /* Écran de fin */
     .gameover {
       position: fixed; inset: 0; z-index: 3;
@@ -262,6 +304,20 @@
         <dt>Durée</dt><dd id="fin-duree">—</dd>
         <dt>Multiplicateur final</dt><dd id="fin-multi">—</dd>
       </dl>
+      <form class="signature" id="signature">
+        <label for="signature-nom">Entrez votre nom au tableau d'honneur</label>
+        <div class="champ">
+          <input id="signature-nom" name="nom" type="text" maxlength="16" autocomplete="off"
+                 spellcheck="false" placeholder="Votre pseudo" required>
+          <button class="bouton" type="submit">Valider</button>
+        </div>
+        <p class="etat" id="signature-etat" hidden></p>
+      </form>
+      <section class="classement" id="classement" hidden>
+        <h2>Tableau d'honneur</h2>
+        <ol id="classement-liste"></ol>
+        <p class="etat" id="classement-etat" hidden></p>
+      </section>
       <button class="bouton rejouer" type="button">Relancer une partie</button>
     </div>
   </div>
