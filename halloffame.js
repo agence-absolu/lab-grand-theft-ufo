@@ -1,8 +1,11 @@
 // -------------------------------------------------------------- hall of fame
-// Le jeu est un pur front statique : la persistance passe donc par Supabase,
-// interrogé directement en REST depuis le navigateur avec la clé anon. Cette
-// clé est publique par nature ; ce sont les règles RLS de la table qui
-// autorisent l'insertion et la lecture, et rien d'autre (voir README).
+// Le jeu est un pur front statique : la persistance passe donc par Supabase.
+//
+// Lecture : appel REST direct avec la clé anon, autorisé par une policy select.
+// Écriture : la table n'accepte plus d'insertion depuis le navigateur ; elle
+// passe par l'Edge Function `soumettre-score`, qui recale les scores aberrants
+// et bride la cadence avant d'écrire avec la clé service_role (voir
+// HALL-OF-FAME.md et supabase/functions/soumettre-score/).
 //
 // Quand Supabase n'est pas configuré (développement local sans .env) ou que le
 // réseau tombe, on se rabat sur localStorage : le classement devient local au
@@ -52,7 +55,11 @@ function trier(lignes) {
   return [...lignes].sort((a, b) => b.points - a.points || a.duree - b.duree);
 }
 
-/** Enregistre un score. Renvoie true si Supabase l'a bien reçu. */
+/**
+ * Enregistre un score.
+ * Renvoie `{ ok: true }` si Supabase l'a accepté, `{ ok: false, refus }` s'il a
+ * été rejeté sur le fond, `{ ok: false }` s'il a fini en repli local.
+ */
 export async function enregistrerScore(score) {
   const ligne = {
     nom: nettoyerNom(score.nom) || 'Anonyme',
@@ -64,17 +71,23 @@ export async function enregistrerScore(score) {
 
   if (distant) {
     try {
-      const r = await fetch(`${URL_BASE}/rest/v1/${TABLE}`, {
+      const r = await fetch(`${URL_BASE}/functions/v1/soumettre-score`, {
         method: 'POST',
-        headers: { ...entetes, Prefer: 'return=minimal' },
+        headers: entetes,
         body: JSON.stringify(ligne),
       });
-      if (r.ok) return true;
+      if (r.ok) return { ok: true };
+      // 4xx : la fonction a jugé le score irrecevable. Le conserver en local
+      // n'aurait pas de sens, et le joueur mérite de savoir pourquoi.
+      if (r.status >= 400 && r.status < 500) {
+        const { erreur } = await r.json().catch(() => ({}));
+        return { ok: false, refus: erreur || 'score refusé' };
+      }
     } catch { /* hors ligne : repli local ci-dessous */ }
   }
 
   ecrireLocal(trier([...lireLocal(), { ...ligne, cree_le: new Date().toISOString() }]));
-  return false;
+  return { ok: false };
 }
 
 /** Les meilleurs scores, du plus élevé au plus faible. */

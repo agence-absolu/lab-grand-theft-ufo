@@ -1375,13 +1375,22 @@ document.getElementById('signature').addEventListener('submit', async (e) => {
   etat.textContent = 'Enregistrement…';
 
   const score = { ...scoreDuTour, nom };
-  const envoye = await enregistrerScore(score);
-  scoreDuTour = null;
+  const envoi = await enregistrerScore(score);
 
+  // Score refusé sur le fond : le formulaire reste, avec le motif. Rien n'est
+  // rejouable à l'identique, mais une nouvelle tentative reste possible.
+  if (envoi.refus) {
+    champ.disabled = bouton.disabled = false;
+    etat.textContent = envoi.refus;
+    champ.focus();
+    return;
+  }
+
+  scoreDuTour = null;
   elSignature().hidden = true;
   champ.disabled = bouton.disabled = false;
   await afficherClassement(score);
-  if (!envoye && distant) {
+  if (!envoi.ok && distant) {
     const etatC = document.getElementById('classement-etat');
     etatC.hidden = false;
     etatC.textContent = 'Serveur injoignable : score conservé sur cet appareil.';
@@ -2067,6 +2076,9 @@ function nouvellePartie() {
   fin.style.setProperty('--noir', 0);
   elSignature().hidden = false;
   elClassement().hidden = true;
+  // Le tableau est vidé dès maintenant : sans cela, les lignes de la partie
+  // précédente réapparaîtraient un instant à la prochaine victoire.
+  document.getElementById('classement-liste').replaceChildren();
   scoreDuTour = null;
   document.querySelector('.hint').hidden = false;
 
