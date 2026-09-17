@@ -17,6 +17,8 @@ const FLY_HEIGHT   = 4.6;   // hauteur de vol au-dessus du sol
 const LERP_FACTOR  = 0.045; // retard de suivi (plus petit = plus mou)
 const FRUSTUM      = 18;    // "zoom" de la caméra orthographique
 
+console.log('test', FRUSTUM)
+
 const COW_DENSITE  = 260;   // 1 vache par ~260 unités² de zone visible
 const COW_MARGE_X  = 0.92;  // marge horizontale en coordonnées écran (-1..1)
 const COW_MARGE_Y  = 0.84;  // marge verticale, plus stricte : une vache perchée
