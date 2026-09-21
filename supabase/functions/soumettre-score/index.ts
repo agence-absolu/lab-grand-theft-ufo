@@ -14,7 +14,12 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 const MAX_NOM = 16;
 const MAX_CAPTURES = 200;     // troupeau généreux : la densité dépend du viewport
 const PTS_PAR_VACHE = 10;     // vache la plus coriace (5) × multiplicateur max (2)
-const MAX_TOUCHES = 2;        // au 3e missile l'OVNI explose : une victoire en a au plus 2
+// Les vies sont refaites à chaque passage de niveau : une partie gagnée peut
+// donc encaisser (VIES - 1) missiles par niveau traversé. À tenir à jour si le
+// nombre de vies ou de niveaux change dans le jeu.
+const VIES = 3;
+const NIVEAUX = 2;
+const MAX_TOUCHES = (VIES - 1) * NIVEAUX;
 const SEC_PAR_VACHE = 0.3;    // plancher de durée : enlever une vache prend du temps
 const MAX_DUREE = 3 * 3600;   // trois heures : au-delà, la valeur n'a plus de sens
 const FENETRE_MS = 60_000;    // fenêtre du garde-fou de cadence
@@ -52,7 +57,9 @@ function invalider(s: { points: number; captures: number; touches: number; duree
   const entiers = [s.points, s.captures, s.touches, s.duree];
   if (entiers.some((v) => !Number.isInteger(v) || v < 0)) return 'valeurs invalides';
   if (s.captures < 1 || s.captures > MAX_CAPTURES) return 'nombre de vaches invalide';
-  if (s.touches > MAX_TOUCHES) return 'une partie gagnée encaisse au plus 2 missiles';
+  if (s.touches > MAX_TOUCHES) {
+    return `une partie gagnée encaisse au plus ${MAX_TOUCHES} missiles`;
+  }
   if (s.duree > MAX_DUREE) return 'durée invalide';
   // Le plafond de points découle du barème : chaque vache vaut au mieux 5 points,
   // doublés par le multiplicateur de rapidité.
