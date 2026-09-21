@@ -276,18 +276,6 @@
     .transition.affiche .sous { opacity: .8; }
     .transition.affiche .titre { opacity: 1; transform: none; }
 
-    /* Bouton de mise au point : saut de niveau immédiat */
-    .debug {
-      position: fixed; left: 22px; bottom: 18px; z-index: 6;
-      border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer;
-      font: 600 12px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
-      color: #24402f; background: rgba(255, 255, 255, .5);
-      box-shadow: 0 2px 10px rgba(30, 60, 45, .12);
-      backdrop-filter: blur(6px); opacity: .55;
-      transition: opacity .15s linear, transform .15s ease-out;
-    }
-    .debug:hover { opacity: 1; transform: scale(1.05); }
-
     /* Écran de fin */
     .gameover {
       position: fixed; inset: 0; z-index: 3;
@@ -410,7 +398,6 @@
       .bandeau { bottom: 46px; font-size: 12.5px; padding: 9px 14px; }
       .recherche .etoile { font-size: 19px; }
       .son { right: 12px; bottom: 12px; }
-      .debug { left: 12px; bottom: 12px; padding: 7px 11px; font-size: 11px; }
       .hint { bottom: 10px; font-size: 11px; padding: 7px 12px; }
       .accueil { gap: 22px; padding: 0 18px; }
       .accueil .sous-titre { margin-top: -8px; }
@@ -535,7 +522,6 @@
     <button class="bouton rejouer" type="button">Relancer une partie</button>
   </div>
   <button class="son" id="son" type="button" title="Couper le son">🔊</button>
-  <button class="debug" id="debug-niveau" type="button" title="Debug : niveau suivant (N)">⏭ niveau</button>
   <p class="hint">Bougez la souris — l'OVNI suit le curseur · cliquez pour allumer le faisceau</p>
   <script type="module" src="./main.js"></script>
 </body>

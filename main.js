@@ -407,24 +407,62 @@ function construirePyramide(scl, couleur) {
   return { groupe, couronne, hauteur: y + 0.7 * scl };
 }
 
-// Emprise de l'interface en coordonnées écran normalisées. Mesurée sur le DOM
-// plutôt que codée en dur : les bandeaux n'ont pas la même taille relative sur
-// un écran de poche et sur un moniteur, et ils bougent avec les media queries.
-function zonesInterface() {
-  const zones = [];
-  for (const sel of ['#vie', '#recherche', '#temples', '#score']) {
+// ------------------------------------------------------- emprise de l'interface
+// Rien de jouable ne doit se retrouver caché derrière un bandeau. L'emprise est
+// mesurée sur le DOM plutôt que codée en dur : elle n'occupe pas la même
+// fraction d'un écran de poche et d'un moniteur, et les media queries la
+// déplacent. Recalculée à chaque construction du monde, donc à chaque
+// redimensionnement.
+const UI_SELECTEURS = ['#vie', '#recherche', '#temples', '#score', '.hint', '#son'];
+let zonesUI = [];
+
+function boiteEnNdc(el) {
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return {
+    x0: (r.left / innerWidth) * 2 - 1,
+    x1: (r.right / innerWidth) * 2 - 1,
+    y0: -(r.bottom / innerHeight) * 2 + 1,
+    y1: -(r.top / innerHeight) * 2 + 1,
+  };
+}
+
+// Le bandeau d'information est transitoire : il faut réserver sa place avant
+// qu'il paraisse. On le déplie le temps d'une mesure, invisible et avec un
+// texte de référence — sa largeur est bornée par le CSS, pas par son contenu.
+function boiteBandeau() {
+  const el = document.getElementById('bandeau');
+  if (!el) return null;
+  if (!el.hidden) return boiteEnNdc(el);
+
+  const texte = el.textContent;
+  el.textContent = 'M'.repeat(44);
+  el.style.visibility = 'hidden';
+  el.hidden = false;
+  const boite = boiteEnNdc(el);
+  el.hidden = true;
+  el.style.visibility = '';
+  el.textContent = texte;
+  return boite;
+}
+
+function mesurerInterface() {
+  zonesUI = [];
+  for (const sel of UI_SELECTEURS) {
     const el = document.querySelector(sel);
     if (!el || el.hidden) continue;
-    const r = el.getBoundingClientRect();
-    if (!r.width || !r.height) continue;
-    zones.push({
-      x0: (r.left / innerWidth) * 2 - 1,
-      x1: (r.right / innerWidth) * 2 - 1,
-      y0: -(r.bottom / innerHeight) * 2 + 1,
-      y1: -(r.top / innerHeight) * 2 + 1,
-    });
+    const boite = boiteEnNdc(el);
+    if (boite) zonesUI.push(boite);
   }
-  return zones;
+  const bandeau = boiteBandeau();
+  if (bandeau) zonesUI.push(bandeau);
+}
+
+// Un point de l'écran, élargi de l'encombrement de ce qu'on veut y poser,
+// passe-t-il sous un bandeau ?
+function sousInterface(nx, ny, mx, my) {
+  return zonesUI.some((z) =>
+    nx + mx > z.x0 && nx - mx < z.x1 && ny + my > z.y0 && ny - my < z.y1);
 }
 
 function placerPyramides() {
@@ -439,11 +477,8 @@ function placerPyramides() {
 
   // Encombrement du temple à l'écran, pour ne pas le glisser à moitié sous un
   // bandeau : large comme sa base, haut comme ses gradins plus la couronne.
-  const interfaces = zonesInterface();
   const margeX = (rayon * 1.4) / (FRUSTUM * (innerWidth / innerHeight));
   const margeY = (rayon + 3.4 * scl) / FRUSTUM;
-  const sousInterface = (nx, ny) => interfaces.some((z) =>
-    nx + margeX > z.x0 && nx - margeX < z.x1 && ny + margeY > z.y0 && ny - margeY < z.y1);
 
   for (let i = 0; i < PYRA_NB; i++) {
     // Réparties en éventail sur la moitié haute du cadre — droite, sommet,
@@ -463,7 +498,7 @@ function placerPyramides() {
       const bord = Math.max(Math.abs(Math.cos(angle)), Math.abs(Math.sin(angle)));
       const nx = (Math.cos(angle) / bord) * rho;
       const ny = (Math.sin(angle) / bord) * rho;
-      if (sousInterface(nx, ny)) continue;     // jamais sous un bandeau du HUD
+      if (sousInterface(nx, ny, margeX, margeY)) continue;   // jamais sous un bandeau
       const p = solDepuisEcran(nx, ny);
       if (!p) continue;
       x = p.x; z = p.z;
@@ -560,6 +595,9 @@ function construireSol(repeupler = true) {
   s.updateProjectionMatrix();
 
   demiEtendue = half;
+  // L'emprise du HUD interdit des emplacements — et elle bouge avec le format
+  // de l'écran, donc on la reprend même quand le monde n'est pas repeuplé.
+  mesurerInterface();
 
   // Redimensionnement en cours de partie (rotation de l'écran, barre d'adresse
   // qui se replie sur mobile) : seul le tapis de sol est refait. Décor, troupeau
@@ -928,11 +966,17 @@ function placerVaches() {
     const scl = THREE.MathUtils.lerp(COW_SCL_MIN, COW_SCL_MAX, resistance) * echelleMonde;
     const r = (COW_TAILLE * scl) / 2 + 0.1; // demi-longueur + petite marge
 
+    // Encombrement de la bête à l'écran : on ne la pose pas sous un bandeau,
+    // où le joueur ne la verrait jamais.
+    const mx = (COW_TAILLE * scl * 0.7) / (FRUSTUM * (innerWidth / innerHeight));
+    const my = (COW_TAILLE * scl * 0.9) / FRUSTUM;
+
     let x = 0, z = 0, ok = false;
     for (let a = 0; a < ESSAIS && !ok; a++) {
       // Seeds distincts par tentative : le tirage reste déterministe.
       const sx = (rand(i * 37 + a * 911 + 1201 + grainNiveau) * 2 - 1) * COW_MARGE_X;
       const sy = (rand(i * 53 + a * 577 + 2803 + grainNiveau) * 2 - 1) * COW_MARGE_Y;
+      if (sousInterface(sx, sy, mx, my)) continue;
       const p = solDepuisEcran(sx, sy);
       if (!p) continue;
       x = p.x; z = p.z;
@@ -2376,7 +2420,16 @@ const ndcVache = new THREE.Vector3();
 function dansCadreVache(v) {
   camera.updateMatrixWorld();
   ndcVache.set(v.position.x, hauteur(v.position.x, v.position.z), v.position.z).project(camera);
-  return Math.abs(ndcVache.x) <= COW_MARGE_X && Math.abs(ndcVache.y) <= COW_MARGE_Y;
+  if (Math.abs(ndcVache.x) > COW_MARGE_X || Math.abs(ndcVache.y) > COW_MARGE_Y) return false;
+
+  // Derrière un bandeau, elle est aussi perdue que hors du cadre : le joueur ne
+  // la voit pas. Elle rentre au pré.
+  const r = (COW_TAILLE * v.scale.x) / 2;
+  return !sousInterface(
+    ndcVache.x, ndcVache.y,
+    (r * 1.4) / (FRUSTUM * (innerWidth / innerHeight)),
+    (r * 1.8) / FRUSTUM,
+  );
 }
 
 // Halée par une soucoupe qui file, une bête en cours d'abduction peut être
@@ -2400,6 +2453,14 @@ function choisirOccupation(v, d, t) {
   const dx = d.x0 - v.position.x;
   const dz = d.z0 - v.position.z;
   const loin = d.presse || dx * dx + dz * dz > VACHE_LAISSE * VACHE_LAISSE;
+
+  // Le piquet lui-même est caché (l'interface a bougé, ou le cadre a changé de
+  // format) : on le fait glisser vers le centre, sinon la bête ferait des
+  // allers-retours sous le bandeau.
+  if (d.presse && dx * dx + dz * dz < 0.6 * 0.6) {
+    d.x0 *= 0.7;
+    d.z0 *= 0.7;
+  }
 
   if (d.etat === 'marche' && !loin) {
     d.etat = 'broute';
@@ -3161,19 +3222,18 @@ for (const b of document.querySelectorAll('.rejouer')) {
 }
 
 // ------------------------------------------------------------------- debug
-// Raccourci de mise au point : bascule immédiatement sur le niveau suivant,
-// sans attendre que le troupeau soit enlevé (touche N, ou le bouton discret en
-// bas à gauche). Boucle sur le premier niveau une fois le dernier atteint.
-function sauterNiveau() {
-  if (!demarre || gel || ufoDetruit || victoire >= 0) return;
-  entrerNiveau((niveauJeu + 1) % NIVEAUX.length);
+// Raccourci de mise au point : la touche N bascule immédiatement sur le niveau
+// suivant, sans attendre que le troupeau soit enlevé, et boucle sur le premier
+// une fois le dernier atteint. Réservé au serveur de développement : dans le
+// bundle de production, ce bloc n'existe pas — un joueur ne doit pas sauter un
+// niveau d'une frappe au clavier.
+if (import.meta.env.DEV) {
+  addEventListener('keydown', (ev) => {
+    if (saisieEnCours(ev)) return;
+    if (ev.key !== 'n' && ev.key !== 'N') return;
+    if (!demarre || gel || ufoDetruit || victoire >= 0) return;
+    entrerNiveau((niveauJeu + 1) % NIVEAUX.length);
+  });
 }
-
-const elDebug = document.getElementById('debug-niveau');
-elDebug.addEventListener('click', () => { sauterNiveau(); elDebug.blur(); });
-addEventListener('keydown', (ev) => {
-  if (saisieEnCours(ev)) return;
-  if (ev.key === 'n' || ev.key === 'N') sauterNiveau();
-});
 
 renderer.setAnimationLoop(animate);
