@@ -1,6 +1,7 @@
 // Bande-son complète, synthétisée en direct — aucun fichier audio.
 //
-//   1. le banjo bluegrass, qui s'emballe avec l'arrivée des blindés ;
+//   1. l'accompagnement — banjo bluegrass dans la plaine, flûte de pan dans le
+//      désert — qui s'emballe avec l'arrivée des blindés ;
 //   2. un bourdon soucoupe à trémolo, qui s'intensifie quand l'OVNI file ;
 //   3. le zap du faisceau, dont la hauteur monte avec l'avancement de l'abduction.
 //
@@ -50,6 +51,7 @@ let prochaineNote = 0;
 let pas = 0;              // double-croche courante dans la grille
 let bpm = BPM_LENT;
 let bpmCible = BPM_LENT;
+let ambiance = 'banjo';   // accompagnement courant : 'banjo' ou 'flute'
 let coupe = false;
 
 const cordes = new Map();
@@ -137,10 +139,144 @@ function frappe(temps) {
   src.start(temps);
 }
 
+// ------------------------------------------------------- flûte de pan
+// Quena/siku : un corps quasi sinusoïdal (peu d'harmoniques), un vibrato lent,
+// et surtout le « chiff » — la bouffée d'air au bord du tuyau à chaque attaque.
+// C'est ce souffle, plus que la hauteur, qui signe l'instrument.
+const FLUTE_VOL = 0.30;
+
+let souffleBuffer = null;
+
+function bufferSouffle() {
+  if (souffleBuffer) return souffleBuffer;
+  const sr = ctx.sampleRate;
+  souffleBuffer = ctx.createBuffer(1, Math.ceil(sr * 0.5), sr);
+  const d = souffleBuffer.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return souffleBuffer;
+}
+
+function souffler(freq, temps, duree, niveau) {
+  const fin = temps + duree;
+
+  // Corps : sinus dominant + un filet de triangle pour la matière du tuyau.
+  // Attaque et extinction bornées : au tempo le plus vif, une croche dure à
+  // peine plus que l'enveloppe elle-même.
+  const attaque = Math.min(0.07, duree * 0.35);
+  const lache = Math.max(temps + attaque + 0.01, fin - 0.09);
+
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, temps);
+  g.gain.exponentialRampToValueAtTime(niveau, temps + attaque);       // attaque molle
+  g.gain.setValueAtTime(niveau, lache);
+  g.gain.exponentialRampToValueAtTime(0.0001, fin + 0.04);
+  g.connect(busBanjo);
+
+  const corps = ctx.createOscillator();
+  corps.type = 'sine';
+  corps.frequency.value = freq;
+  const bois = ctx.createOscillator();
+  bois.type = 'triangle';
+  bois.frequency.value = freq;
+  const gBois = ctx.createGain();
+  gBois.gain.value = 0.22;
+
+  // Vibrato lent, qui s'installe après l'attaque : le joueur pose son souffle.
+  const vib = ctx.createOscillator();
+  vib.type = 'sine';
+  vib.frequency.value = 5.2;
+  const vibProf = ctx.createGain();
+  vibProf.gain.setValueAtTime(0.0001, temps);
+  vibProf.gain.linearRampToValueAtTime(freq * 0.009, temps + duree * 0.6);
+  vib.connect(vibProf);
+  vibProf.connect(corps.frequency);
+  vibProf.connect(bois.frequency);
+
+  corps.connect(g);
+  bois.connect(gBois).connect(g);
+  for (const o of [corps, bois, vib]) { o.start(temps); o.stop(fin + 0.08); }
+
+  // Le chiff : bruit filtré autour de la hauteur jouée, très court.
+  const air = ctx.createBufferSource();
+  air.buffer = bufferSouffle();
+  air.playbackRate.value = 0.8 + Math.random() * 0.4;
+  const passe = ctx.createBiquadFilter();
+  passe.type = 'bandpass';
+  passe.frequency.value = freq * 2.2;
+  passe.Q.value = 1.4;
+  const gAir = ctx.createGain();
+  gAir.gain.setValueAtTime(niveau * 0.9, temps);
+  gAir.gain.exponentialRampToValueAtTime(niveau * 0.12, temps + 0.11);
+  gAir.gain.exponentialRampToValueAtTime(0.0001, fin);
+  air.connect(passe).connect(gAir).connect(busBanjo);
+  air.start(temps);
+  air.stop(fin + 0.05);
+}
+
+// Bombo : le tambour andin, peau grave et mate, sur les temps forts.
+function bombo(temps, niveau = 0.5) {
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(110, temps);
+  osc.frequency.exponentialRampToValueAtTime(48, temps + 0.12);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, temps);
+  g.gain.exponentialRampToValueAtTime(niveau, temps + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, temps + 0.3);
+  osc.connect(g).connect(busBanjo);
+  osc.start(temps);
+  osc.stop(temps + 0.32);
+
+  // Un voile de peau par-dessus, pour que la frappe ne soit pas qu'un sinus.
+  const peau = ctx.createBufferSource();
+  peau.buffer = bufferSouffle();
+  peau.playbackRate.value = 1.6;
+  const f = ctx.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.value = 420;
+  const gp = ctx.createGain();
+  gp.gain.setValueAtTime(niveau * 0.5, temps);
+  gp.gain.exponentialRampToValueAtTime(0.0001, temps + 0.13);
+  peau.connect(f).connect(gp).connect(busBanjo);
+  peau.start(temps);
+  peau.stop(temps + 0.15);
+}
+
+// Motif de croches sur la mesure : degrés pris dans l'accord courant, en
+// pentatonique. Les nulls sont des respirations — sans elles, c'est une machine.
+const MOTIF_FLUTE = [4, 2, 3, null, 4, 3, 2, 1];
+const MOTIF_FLUTE_B = [3, 4, null, 2, 1, 2, 3, null];
+
+function programmerFlute(temps, dans, accord, basse) {
+  // Une croche sur deux : la flûte respire là où le banjo roulait.
+  if (dans % 2 === 0) {
+    const mesurePaire = Math.floor(pas / 16) % 2 === 0;
+    const motif = mesurePaire ? MOTIF_FLUTE : MOTIF_FLUTE_B;
+    const degre = motif[(dans / 2) % motif.length];
+    if (degre !== null) {
+      const croche = 30 / bpm;                       // durée d'une croche
+      const note = accord[degre] * 2;                // un octave au-dessus : c'est aigu
+      const tenue = dans % 8 === 0 ? croche * 1.7 : croche * 0.95;
+      souffler(note, temps, tenue, FLUTE_VOL * (dans % 4 === 0 ? 1 : 0.72));
+      // Doublure à la quinte inférieure sur les appuis : le siku joue en paires.
+      if (dans % 8 === 0) souffler(accord[0] * 2, temps + 0.012, tenue * 0.8, FLUTE_VOL * 0.35);
+    }
+  }
+
+  if (dans === 0 || dans === 6 || dans === 10) bombo(temps, dans === 0 ? 0.55 : 0.34);
+  if (dans % 8 === 4) contrebasse(basse, temps);     // pouls grave, comme au banjo
+}
+
 function programmer(temps) {
   const mesure = Math.floor(pas / 16) % GRILLE.length;
   const dans = pas % 16;
   const { accord, basse } = GRILLE[mesure];
+
+  if (ambiance === 'flute') {
+    programmerFlute(temps, dans, accord, basse);
+    pas++;
+    return;
+  }
 
   // Le roulement de banjo, une double-croche après l'autre.
   const note = accord[ROULEMENT[dans] % accord.length];
@@ -248,6 +384,10 @@ export function setVitesseUfo(vitesse) {
 const ZAP_HZ = [240, 1500];         // hauteur à 0 % et à 100 % d'abduction
 const ZAP_HACHE = [22, 46];         // fréquence du hachage
 const ZAP_VOL = 0.26;        // volume de premier plan
+// Faisceau inopérant (temples endormis) : le laser bute sur les boucliers et
+// descend d'une octave et demie, timbre mat.
+const ZAP_GRAVE = 0.38;      // transposition appliquée à toutes les hauteurs
+let zapTranspose = 1;
 
 let zapOsc = null, zapFiltre = null, zapGain = null, zapPorte = null;
 let zapHacheOsc = null, zapHacheProf = null;
@@ -314,10 +454,23 @@ export function setZapProgression(p) {
   if (!ctx) return;
   const t = Math.min(1, Math.max(0, p));
   const maintenant = ctx.currentTime;
-  const f = entre(ZAP_HZ, t * t);          // la montée se sent surtout sur la fin
+  const f = entre(ZAP_HZ, t * t) * zapTranspose;   // la montée se sent surtout sur la fin
   zapOsc.frequency.setTargetAtTime(f, maintenant, 0.06);
   zapFiltre.frequency.setTargetAtTime(f * 3, maintenant, 0.06);
-  zapHacheOsc.frequency.setTargetAtTime(entre(ZAP_HACHE, t), maintenant, 0.06);
+  zapHacheOsc.frequency.setTargetAtTime(entre(ZAP_HACHE, t) * zapTranspose, maintenant, 0.06);
+}
+
+// Faisceau qui ne prend rien : le laser sonne plus grave et plus sourd.
+export function setZapGrave(grave) {
+  const voulu = grave ? ZAP_GRAVE : 1;
+  if (voulu === zapTranspose) return;
+  zapTranspose = voulu;
+  if (!ctx || !zapOsc) return;
+  const maintenant = ctx.currentTime;
+  // Glissando : la bascule s'entend comme un affaissement, pas comme une coupure.
+  zapOsc.frequency.setTargetAtTime(zapOsc.frequency.value * (grave ? ZAP_GRAVE : 1 / ZAP_GRAVE), maintenant, 0.08);
+  zapFiltre.frequency.setTargetAtTime(zapOsc.frequency.value * 3, maintenant, 0.08);
+  zapHacheOsc.frequency.setTargetAtTime(zapHacheOsc.frequency.value * (grave ? ZAP_GRAVE : 1 / ZAP_GRAVE), maintenant, 0.08);
 }
 
 // ----------------------------------------------------------- mugissement
@@ -790,6 +943,13 @@ export function demarrerMusique() {
   reveillerAudio();
 }
 
+// Accompagnement du niveau : le banjo de la plaine, ou la flûte de pan du
+// désert. Le tempo, la grille d'accords et l'emballement restent les mêmes :
+// seul l'instrument change, sans coupure.
+export function setAmbianceMusicale(nom) {
+  ambiance = nom === 'flute' ? 'flute' : 'banjo';
+}
+
 // Tension : part des blindés effectivement présents dans le cadre, de 0 à 1.
 // Plus ils débarquent, plus le roulement s'emballe.
 export function setTensionMusique(part) {
@@ -850,4 +1010,122 @@ export function basculerSon() {
     maitre.gain.setTargetAtTime(coupe ? 0 : VOLUME, ctx.currentTime, 0.05);
   }
   return !coupe;
+}
+
+// ------------------------------------------------------------- temples incas
+// Les pyramides du désert doivent « sonner » sous le faisceau avant de
+// s'allumer : une voix tenue qui monte tant que le joueur tient sa position,
+// puis une cloche claire quand le temple s'éveille.
+const TEMPLE_HZ = [392.00, 523.25, 659.25];   // sol, do, mi : un accord majeur
+const TEMPLE_VOL = 0.30;
+
+let templeOsc = null, templeQuinte = null, templePorte = null, templeFiltre = null;
+
+function construireTemple() {
+  templeOsc = ctx.createOscillator();
+  templeOsc.type = 'sine';
+  templeQuinte = ctx.createOscillator();
+  templeQuinte.type = 'triangle';
+
+  const melange = ctx.createGain();
+  melange.gain.value = 0.45;
+
+  templeFiltre = ctx.createBiquadFilter();
+  templeFiltre.type = 'lowpass';
+  templeFiltre.frequency.value = 1200;
+  templeFiltre.Q.value = 2;
+
+  templePorte = ctx.createGain();
+  templePorte.gain.value = 0;
+
+  templeOsc.connect(melange);
+  templeQuinte.connect(melange);
+  melange.connect(templeFiltre).connect(templePorte).connect(busSfx);
+  templeOsc.start();
+  templeQuinte.start();
+}
+
+// Le temple commence à résonner : voix tenue sur sa propre note.
+export function demarrerTemple(indice) {
+  if (!ctx) return;
+  if (!templeOsc) construireTemple();
+  const f = TEMPLE_HZ[indice % TEMPLE_HZ.length];
+  const t = ctx.currentTime;
+  templeOsc.frequency.setTargetAtTime(f, t, 0.02);
+  templeQuinte.frequency.setTargetAtTime(f * 1.5, t, 0.02);
+  templePorte.gain.cancelScheduledValues(t);
+  templePorte.gain.setTargetAtTime(TEMPLE_VOL * 0.25, t, 0.04);
+}
+
+// Avancement de la charge, de 0 à 1 : le son s'ouvre et gagne en brillance.
+export function setTempleProgression(p) {
+  if (!ctx || !templeOsc) return;
+  const q = Math.min(1, Math.max(0, p));
+  const t = ctx.currentTime;
+  templePorte.gain.setTargetAtTime(TEMPLE_VOL * (0.25 + 0.75 * q), t, 0.05);
+  templeFiltre.frequency.setTargetAtTime(900 + 2600 * q, t, 0.05);
+}
+
+export function arreterTemple() {
+  if (!ctx || !templeOsc) return;
+  templePorte.gain.cancelScheduledValues(ctx.currentTime);
+  templePorte.gain.setTargetAtTime(0, ctx.currentTime, 0.06);
+}
+
+// Temple éveillé : cloche à trois partiels, qui laisse traîner sa queue.
+export function templeAllume(indice) {
+  if (!ctx) return;
+  arreterTemple();
+  const f = TEMPLE_HZ[indice % TEMPLE_HZ.length];
+  const t0 = ctx.currentTime;
+  for (const [mult, niveau, duree] of [[1, 0.34, 2.2], [2, 0.18, 1.6], [3.01, 0.10, 1.1]]) {
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = f * mult;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(niveau, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + duree);
+    o.connect(g).connect(busSfx);
+    o.start(t0);
+    o.stop(t0 + duree + 0.05);
+  }
+}
+
+// Les trois temples allumés : petit arpège d'ouverture, le troupeau est à prendre.
+export function templesPrets() {
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  TEMPLE_HZ.forEach((f, i) => {
+    const o = ctx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = f * 2;
+    const g = ctx.createGain();
+    const d = t0 + i * 0.12;
+    g.gain.setValueAtTime(0.0001, d);
+    g.gain.exponentialRampToValueAtTime(0.22, d + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, d + 0.9);
+    o.connect(g).connect(busSfx);
+    o.start(d);
+    o.stop(d + 0.95);
+  });
+}
+
+// Refus : le faisceau mord dans le vide tant que les temples dorment.
+export function faisceauRefuse() {
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  for (let i = 0; i < 2; i++) {
+    const o = ctx.createOscillator();
+    o.type = 'square';
+    o.frequency.setValueAtTime(150, t0 + i * 0.11);
+    o.frequency.exponentialRampToValueAtTime(90, t0 + i * 0.11 + 0.09);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0 + i * 0.11);
+    g.gain.exponentialRampToValueAtTime(0.16, t0 + i * 0.11 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.11 + 0.10);
+    o.connect(g).connect(busSfx);
+    o.start(t0 + i * 0.11);
+    o.stop(t0 + i * 0.11 + 0.12);
+  }
 }

@@ -9,7 +9,14 @@
   <link rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Freckle+Face&family=Open+Sans:wght@400;600;700&display=swap">
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #cfe8d8; }
+    html, body {
+      margin: 0; padding: 0; height: 100%; overflow: hidden; background: #cfe8d8;
+      /* Le jeu se pilote au doigt : aucun défilement, zoom ou tiré-pour-rafraîchir
+         ne doit venir interrompre le geste. */
+      touch-action: none; overscroll-behavior: none;
+      -webkit-user-select: none; user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
     /* Fond perdu : le canvas couvre tout le viewport, sans marge ni bord visible. */
     canvas {
       display: block;
@@ -87,6 +94,61 @@
       0%, 49%  { color: #ffd233; transform: scale(1.25); }
       50%, 99% { color: rgba(255, 255, 255, .3); transform: scale(1); }
     }
+
+    /* Temples du désert : une pastille par sanctuaire à éveiller */
+    .temples {
+      position: fixed; top: 104px; left: 22px; z-index: 2;
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 14px; border-radius: 999px;
+      background: rgba(255, 255, 255, .62);
+      box-shadow: 0 2px 10px rgba(30, 60, 45, .12);
+      backdrop-filter: blur(6px);
+      font: 600 12px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: .12em; text-transform: uppercase; color: #24402f;
+      user-select: none; pointer-events: none;
+    }
+    .temples[hidden] { display: none; }
+    .temples .libelle { opacity: .55; }
+    .temples .jeu { display: flex; gap: 6px; }
+    .temples .pastille {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid var(--teinte, #2ea8ff);
+      /* Le remplissage suit la résonance en cours : conique, comme une jauge. */
+      background:
+        conic-gradient(var(--teinte, #2ea8ff) calc(var(--charge, 0) * 360deg),
+                       transparent 0);
+      opacity: .45;
+      transition: opacity .2s linear, box-shadow .3s ease-out;
+    }
+    .temples .pastille[hidden] { display: none; }
+    .temples .pastille.allumee {
+      opacity: 1;
+      box-shadow: 0 0 10px var(--teinte, #2ea8ff), 0 0 3px var(--teinte, #2ea8ff) inset;
+    }
+    .temples.pret { background: rgba(255, 255, 255, .8); }
+    /* Enlèvement refusé : le bandeau tressaute pour attirer l'oeil. */
+    .temples.refus { animation: refus .5s ease-out; }
+    @keyframes refus {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-5px); }
+      45% { transform: translateX(5px); }
+      70% { transform: translateX(-3px); }
+    }
+
+    /* Bandeau d'information passager */
+    .bandeau {
+      position: fixed; left: 50%; bottom: 58px; transform: translate(-50%, 8px);
+      z-index: 3; max-width: min(92vw, 44ch); text-align: center;
+      padding: 10px 18px; border-radius: 14px;
+      font: 600 14px/1.4 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      color: #ffe9ee; background: rgba(28, 12, 18, .78);
+      border: 1px solid rgba(255, 45, 85, .45);
+      box-shadow: 0 6px 22px rgba(10, 25, 16, .3);
+      pointer-events: none; user-select: none;
+      opacity: 0; transition: opacity .3s ease-out, transform .3s ease-out;
+    }
+    .bandeau[hidden] { display: none; }
+    .bandeau.affiche { opacity: 1; transform: translate(-50%, 0); }
 
     /* Écran d'accueil */
     .accueil {
@@ -183,6 +245,49 @@
     .fin .etat { margin: 0; font-size: 13px; opacity: .6; text-align: center; }
     .fin .etat[hidden] { display: none; }
 
+    /* Carte de passage de niveau : voile noir, rang, nom du terrain */
+    .transition {
+      position: fixed; inset: 0; z-index: 4;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; pointer-events: none; text-align: center;
+      background: #000; opacity: 0;
+    }
+    .transition[hidden] { display: none; }
+    .transition .rang {
+      margin: 0; font: 600 14px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: .28em; text-transform: uppercase; color: #eaf6ef; opacity: 0;
+      transition: opacity .5s ease-out .15s;
+    }
+    .transition .titre {
+      margin: 0;
+      font: 400 clamp(46px, 11vw, 132px)/1 'Freckle Face', ui-sans-serif, cursive;
+      letter-spacing: .02em; color: #2ea8ff;
+      text-shadow: 0 0 34px rgba(46, 168, 255, .45);
+      opacity: 0; transform: translateY(10px);
+      transition: opacity .5s ease-out .25s, transform .5s ease-out .25s;
+    }
+    .transition .sous {
+      margin: 6px 0 0; max-width: 34ch; padding: 0 18px;
+      font: 500 15px/1.5 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      color: #eaf6ef; opacity: 0;
+      transition: opacity .5s ease-out .4s;
+    }
+    .transition.affiche .rang,
+    .transition.affiche .sous { opacity: .8; }
+    .transition.affiche .titre { opacity: 1; transform: none; }
+
+    /* Bouton de mise au point : saut de niveau immédiat */
+    .debug {
+      position: fixed; left: 22px; bottom: 18px; z-index: 6;
+      border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer;
+      font: 600 12px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      color: #24402f; background: rgba(255, 255, 255, .5);
+      box-shadow: 0 2px 10px rgba(30, 60, 45, .12);
+      backdrop-filter: blur(6px); opacity: .55;
+      transition: opacity .15s linear, transform .15s ease-out;
+    }
+    .debug:hover { opacity: 1; transform: scale(1.05); }
+
     /* Écran de fin */
     .gameover {
       position: fixed; inset: 0; z-index: 3;
@@ -244,11 +349,83 @@
       35%  { transform: scale(1.18); background: rgba(155, 232, 255, .85); }
       100% { transform: scale(1); }
     }
+
+    /* Menu principal (touche Échap en cours de partie) */
+    .menu {
+      position: fixed; inset: 0; z-index: 5;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 28px;
+      background: rgba(8, 20, 14, .72);
+      backdrop-filter: blur(4px);
+    }
+    .menu[hidden] { display: none; }
+    .menu .titre {
+      margin: 0;
+      font: 400 clamp(38px, 9vw, 96px)/1 'Freckle Face', ui-sans-serif, cursive;
+      letter-spacing: .02em; color: #2ea8ff;
+      text-shadow: 0 0 30px rgba(46, 168, 255, .4);
+    }
+    .menu .choix { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
+    .menu .choix .bouton { min-width: 260px; text-align: center; }
+    .menu .vue { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+    .menu .vue[hidden] { display: none; }
+    /* Vue « scores » : même tableau d'honneur que l'écran de victoire. */
+    .menu .classement {
+      width: min(420px, 86vw); padding: 20px 24px; border-radius: 18px;
+      background: rgba(255, 255, 255, .07);
+      border: 1px solid rgba(255, 255, 255, .12);
+      font: 500 15px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif; color: #eaf6ef;
+    }
+    .menu .classement ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+    .menu .classement li {
+      display: grid; grid-template-columns: 2ch 1fr auto; gap: 12px; align-items: baseline;
+      padding: 6px 2px;
+    }
+    .menu .classement li .rang { opacity: .5; text-align: right; font-variant-numeric: tabular-nums; }
+    .menu .classement li .nom { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .menu .classement li .pts { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .menu .etat { margin: 0; font-size: 13px; opacity: .6; text-align: center; color: #eaf6ef; }
+    .menu .etat[hidden] { display: none; }
     .hint {
       position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
       font: 13px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif; color: #3c5a48;
       background: rgba(255,255,255,.6); padding: 8px 14px; border-radius: 999px;
       pointer-events: none; user-select: none;
+      max-width: calc(100vw - 110px); text-align: center; line-height: 1.35;
+    }
+
+    /* ------------------------------------------------------------- mobile
+       Écran étroit : l'interface se resserre pour laisser le cadre de jeu
+       dégagé — c'est là que le pouce travaille. */
+    @media (max-width: 720px) {
+      .score, .vie { top: 12px; gap: 6px; padding: 7px 11px; font-size: 13px; }
+      .score { right: 12px; }
+      .vie { left: 12px; }
+      .score .icone { font-size: 16px; }
+      .score .petit { font-size: 12px; }
+      .score .multi { padding: 3px 6px; }
+      .recherche { top: 50px; left: 12px; gap: 2px; }
+      .temples { top: 84px; left: 12px; padding: 7px 11px; gap: 7px; font-size: 10px; }
+      .temples .pastille { width: 12px; height: 12px; }
+      .bandeau { bottom: 46px; font-size: 12.5px; padding: 9px 14px; }
+      .recherche .etoile { font-size: 19px; }
+      .son { right: 12px; bottom: 12px; }
+      .debug { left: 12px; bottom: 12px; padding: 7px 11px; font-size: 11px; }
+      .hint { bottom: 10px; font-size: 11px; padding: 7px 12px; }
+      .accueil { gap: 22px; padding: 0 18px; }
+      .accueil .sous-titre { margin-top: -8px; }
+      .fin .recap { padding: 16px 20px; gap: 8px 16px; font-size: 14px; }
+      .fin .contenu { gap: 16px; padding: 0 14px; }
+      .menu .choix .bouton { min-width: min(78vw, 300px); }
+      /* Cible tactile confortable, même sur les petits boutons. */
+      .bouton { padding: 15px 26px; }
+    }
+    /* Écran bas (mobile en paysage) : on comprime la verticale. */
+    @media (max-height: 520px) {
+      .fin .contenu, .menu { gap: 12px; }
+      .fin .recap { font-size: 13px; padding: 12px 18px; }
+      .menu .titre { font-size: 34px; }
+      .hint { display: none; }
     }
   </style>
 </head>
@@ -289,6 +466,15 @@
     <span class="etoile">★</span>
     <span class="etoile">★</span>
   </div>
+  <div class="temples" id="temples" hidden>
+    <span class="libelle">Temples</span>
+    <span class="jeu">
+      <span class="pastille"></span>
+      <span class="pastille"></span>
+      <span class="pastille"></span>
+    </span>
+  </div>
+  <p class="bandeau" id="bandeau" hidden></p>
   <div class="accueil" id="accueil" hidden>
     <p class="titre">Grand Theft UFO</p>
     <p class="sous-titre">Enlevez tout le troupeau avant que les blindés ne vous abattent.</p>
@@ -321,11 +507,35 @@
       <button class="bouton rejouer" type="button">Relancer une partie</button>
     </div>
   </div>
+  <div class="menu" id="menu" hidden>
+    <div class="vue" id="menu-principal">
+      <p class="titre">Pause</p>
+      <div class="choix">
+        <button class="bouton" type="button" id="menu-reprendre">Reprendre la partie</button>
+        <button class="bouton" type="button" id="menu-recommencer">Recommencer</button>
+        <button class="bouton" type="button" id="menu-scores">Voir les scores</button>
+      </div>
+    </div>
+    <div class="vue" id="menu-vue-scores" hidden>
+      <p class="titre">Tableau d’honneur</p>
+      <section class="classement">
+        <ol id="menu-classement-liste"></ol>
+        <p class="etat" id="menu-classement-etat" hidden></p>
+      </section>
+      <button class="bouton" type="button" id="menu-retour">Retour</button>
+    </div>
+  </div>
+  <div class="transition" id="transition" hidden>
+    <p class="rang" id="transition-rang">Niveau 2</p>
+    <p class="titre" id="transition-titre">Le désert</p>
+    <p class="sous" id="transition-sous"></p>
+  </div>
   <div class="gameover" id="gameover" hidden>
     <p class="titre">Game Over</p>
     <button class="bouton rejouer" type="button">Relancer une partie</button>
   </div>
   <button class="son" id="son" type="button" title="Couper le son">🔊</button>
+  <button class="debug" id="debug-niveau" type="button" title="Debug : niveau suivant (N)">⏭ niveau</button>
   <p class="hint">Bougez la souris — l'OVNI suit le curseur · cliquez pour allumer le faisceau</p>
   <script type="module" src="./main.js"></script>
 </body>
