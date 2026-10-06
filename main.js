@@ -1837,8 +1837,11 @@ function majVictoire(t, dt) {
   if (u >= 1 && !fin.classList.contains('affiche')) afficherRecap();
 }
 
-function afficherRecap() {
+function afficherRecap(gagne = true) {
   const fin = elFin();
+  fin.hidden = false;
+  if (!gagne) fin.style.setProperty('--noir', 0.78);
+  document.getElementById('fin-titre').textContent = gagne ? 'You won' : 'Game Over';
   const duree = Math.round(clock.elapsedTime);
   const rempl = {
     'fin-points': points,
@@ -1861,6 +1864,15 @@ let scoreDuTour = null;      // score de la partie gagnée, en attente de signat
 
 function proposerSignature(duree) {
   scoreDuTour = { points, captures: capturees, touches, duree };
+  // Un score sans la moindre vache est refusé par le serveur (règle de
+  // plausibilité) : inutile de demander une signature, on montre directement
+  // le tableau d'honneur.
+  if (capturees < 1) {
+    scoreDuTour = null;
+    elSignature().hidden = true;
+    afficherClassement();
+    return;
+  }
   const form = elSignature();
   form.hidden = false;
   form.reset();
@@ -2286,8 +2298,14 @@ function detruireUfo() {
   majBarreVie();
   elVie.classList.remove('critique');
   document.querySelector('.hint').hidden = true;
-  // L'écran de fin arrive une fois la boule de feu bien installée.
+  // L'écran de fin arrive une fois la boule de feu bien installée : le bandeau
+  // clignotant d'abord, puis le même récapitulatif que pour une victoire —
+  // décompte des points, signature et tableau d'honneur.
   setTimeout(() => { document.getElementById('gameover').hidden = false; }, 700);
+  setTimeout(() => {
+    document.getElementById('gameover').hidden = true;
+    afficherRecap(false);
+  }, 2600);
 }
 
 
