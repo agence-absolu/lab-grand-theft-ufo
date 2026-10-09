@@ -150,6 +150,38 @@
     .bandeau[hidden] { display: none; }
     .bandeau.affiche { opacity: 1; transform: translate(-50%, 0); }
 
+    /* Écran de chargement : fond du jeu et jauge circulaire façon abduction.
+       Il couvre tout (son compris, z-index 7) tant que polices, modèles 3D et
+       première image ne sont pas là — rien du jeu ne doit transparaître. */
+    .chargement {
+      position: fixed; inset: 0; z-index: 7;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 22px; background: #cfe8d8; color: #24402f;
+      transition: opacity .45s ease-out;
+    }
+    .chargement.fini { opacity: 0; pointer-events: none; }
+    .chargement[hidden] { display: none; }
+    .chargement .cadran { position: relative; width: 132px; height: 132px; }
+    /* -90deg : l'arc part du haut et tourne dans le sens horaire, comme la
+       jauge d'abduction au-dessus des vaches. */
+    .chargement svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+    .chargement .piste { fill: none; stroke: rgba(36, 64, 47, .14); stroke-width: 9; }
+    .chargement .arc {
+      fill: none; stroke: var(--teinte, #ff7bb0); stroke-width: 9; stroke-linecap: round;
+      transition: stroke-dashoffset .3s ease-out, stroke .3s linear;
+    }
+    .chargement .pourcent {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font: 700 26px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+    .chargement .message {
+      margin: 0;
+      font: 600 14px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: .04em; opacity: .7; min-height: 1em; text-align: center;
+    }
+
     /* Écran d'accueil */
     .accueil {
       position: fixed; inset: 0; z-index: 4;
@@ -176,7 +208,7 @@
     .fin {
       position: fixed; inset: 0; z-index: 4;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 6px; pointer-events: none;
+      gap: 6px; pointer-events: none; padding: 24px 0;
       background: rgb(0 0 0 / var(--noir, 0));
     }
     .fin[hidden] { display: none; }
@@ -184,7 +216,7 @@
       opacity: 0; transform: translateY(12px);
       transition: opacity .6s ease-out, transform .6s ease-out;
       display: flex; flex-direction: column; align-items: center; gap: 22px;
-      text-align: center; color: #eaf6ef;
+      text-align: center; color: #eaf6ef; max-height: 100%;
     }
     .fin.affiche .contenu { opacity: 1; transform: none; }
     .fin .titre {
@@ -233,7 +265,16 @@
       font: 400 26px/1 'Freckle Face', ui-sans-serif, cursive;
       letter-spacing: .02em; color: #2ea8ff; text-align: center;
     }
-    .fin .classement ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+    .fin .classement ol {
+      margin: 0; padding: 0 6px 0 0; list-style: none; display: grid; gap: 8px;
+      max-height: min(32vh, 300px); overflow-y: auto; overscroll-behavior: contain;
+      pointer-events: auto; scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, .25) transparent;
+    }
+    .fin .classement ol::-webkit-scrollbar { width: 6px; }
+    .fin .classement ol::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, .25); border-radius: 3px;
+    }
     .fin .classement li {
       display: grid; grid-template-columns: 2ch 1fr auto; gap: 12px; align-items: baseline;
       padding: 6px 2px; border-radius: 8px;

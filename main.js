@@ -143,12 +143,21 @@ const PERIMETRE = 2 * Math.PI * 52;
 let demarre = false;
 let framesChauffe = 0;
 
+// Même dégradé que la jauge d'abduction : rose au départ, rouge sang à la fin,
+// avec la même courbe accélérée pour que le virage se sente.
+function teinteJauge(part) {
+  const t = Math.pow(Math.min(Math.max(part, 0), 1), 0.75);
+  const c = (a, b) => Math.round(a + (b - a) * t);
+  return `rgb(${c(0xff, 0xc0)}, ${c(0x7b, 0x00)}, ${c(0xb0, 0x18)})`;
+}
+
 function pret(cle) {
   if (postesFaits.has(cle)) return;
   postesFaits.add(cle);
 
   const part = postesFaits.size / POSTES.length;
   elArc.setAttribute('stroke-dashoffset', String(PERIMETRE * (1 - part)));
+  elArc.style.setProperty('--teinte', teinteJauge(part));
   elPourcent.textContent = `${Math.round(part * 100)}%`;
 
   const suivant = POSTES.find(([c]) => !postesFaits.has(c));
@@ -1985,6 +1994,9 @@ async function afficherClassement(mien = null) {
     li.append(rang, nom, pts);
     liste.append(li);
   }
+
+  // La liste défile : on amène la ligne du joueur dans la zone visible.
+  liste.querySelector('li.moi')?.scrollIntoView({ block: 'nearest' });
 }
 
 document.getElementById('signature').addEventListener('submit', async (e) => {
