@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { clone as clonerSquelette } from 'three/addons/utils/SkeletonUtils.js';
 import {
   demarrerMusique, arreterMusique, setTensionMusique, basculerSon,
   setVitesseUfo, demarrerZap, arreterZap, setZapProgression, mugir, majTanksAudio,
@@ -40,7 +41,7 @@ const COW_TAILLE   = 1.8;   // longueur d'une vache (unités monde)
 const VACHE_VIT    = 0.32;  // vitesse de déambulation d'une vache (u/s)
 const VACHE_ROT    = 1.3;   // vitesse de changement de cap (rad/s)
 const VACHE_LAISSE = 1.9;   // éloignement maximal du point de naissance (u)
-const VACHE_PAS    = 6.2;   // cadence du pas (rad/s) : deux appuis par cycle
+const VACHE_FONDU  = 0.25;  // durée du fondu entre les cycles Idle et Walk (s)
 const VACHE_BROUTE = [3.5, 8.0];  // durée d'une session de broutage (s)
 const VACHE_MARCHE = [1.2, 3.0];  // durée d'une déambulation (s)
 const VACHE_ENVIE  = 0.38;  // probabilité de repartir marcher après un broutage
@@ -287,6 +288,7 @@ const NIVEAUX = [
     sol: { h: 0.10, s: 0.40, l: 0.53 },   // sable
     hemisphere: 0xc9a273,
     decor: 'desert',
+    bete: 'lama',          // on n'enlève pas des vaches dans le désert
     pyramides: true,
     musique: 'flute',      // la plaine avait son banjo, le désert a sa flûte de pan
   },
@@ -738,9 +740,21 @@ function majScore(pop, gain) {
 // ------------------------------------------------------------ petites vaches
 // Le .obj est chargé une fois, sa géométrie est partagée par toutes les
 // instances (recentrée en XZ, pattes posées sur Y=0, mise à l'échelle).
-let vacheGeo = null;
-const ROBES = [0xf2efe6, 0xd9d3c4, 0x8b5a3c, 0x6b4630, 0x2e2a28];
-const vachesMats = ROBES.map((c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
+// Le troupeau est un modèle riggé : 24 os aux mêmes noms d'une bête à l'autre,
+// deux cycles d'animation. Le GLB sert de patron — chaque bête en est un clone,
+// avec son propre squelette et son propre mixeur, donc son propre déphasage.
+//
+//   echelle : le lama est plus court et plus haut qu'une vache. Le patron est
+//             normalisé au même gabarit pour les deux ; ce facteur rattrape la
+//             différence, et il est appliqué à l'instance (pas au patron) pour
+//             que `scale` reste la référence des calculs d'encombrement.
+//   foulee  : distance couverte par un cycle Walk, patron à l'échelle 1.
+const BETES = {
+  vache: { fichier: 'cow.glb',  echelle: 1.00, foulee: 0.279 },
+  lama:  { fichier: 'lama.glb', echelle: 0.70, foulee: 0.404 },
+};
+// Toutes les bêtes partagent la robe peinte du modèle : seule l'échelle les
+// distingue, et c'est elle qui annonce leur résistance à l'enlèvement.
 
 // Jauge d'abduction : petit anneau face caméra qui se remplit radialement.
 const jaugeGeo = new THREE.RingGeometry(0.30, 0.46, 56, 1);   // plus grande et plus épaisse
@@ -850,27 +864,60 @@ function nouvelleJauge(debut = 0xff7bb0, fin = 0xc00018) {
   return m;
 }
 
-new OBJLoader().load('./assets/cow.obj', (obj) => {
-  let geo = null;
-  obj.traverse((o) => { if (o.isMesh && !geo) geo = o.geometry; });
-  if (!geo) return console.error('cow.obj : aucune géométrie trouvée');
+// Orientation, recentrage, pattes au sol, gabarit COW_TAILLE. On ne touche pas
+// à la géométrie : les matrices de liaison du squelette en dépendent. Tout se
+// joue sur le nœud qui la porte. L'échelle étant uniforme, la boîte mesurée
+// avant mise à l'échelle reste valable une fois multipliée.
+function preparerBete(bete, gltf) {
+  const inner = gltf.scene;
+  inner.rotation.y = Math.PI / 2;   // les modèles regardent leur +Z, le jeu avance en +X local
 
-  geo = geo.toNonIndexed();           // facettes franches, cohérent avec le reste
-  geo.deleteAttribute('uv');
-  geo.computeBoundingBox();
-  const bb = geo.boundingBox;
-  const taille = new THREE.Vector3().subVectors(bb.max, bb.min);
+  const boite = new THREE.Box3().setFromObject(inner);
+  const taille = new THREE.Vector3().subVectors(boite.max, boite.min);
   const k = COW_TAILLE / Math.max(taille.x, taille.z);
+  inner.scale.setScalar(k);
+  inner.position.set(
+    -((boite.min.x + boite.max.x) / 2) * k,
+    -boite.min.y * k,
+    -((boite.min.z + boite.max.z) / 2) * k,
+  );
 
-  // Recentre en XZ, pose les pattes sur le sol, puis met à l'échelle.
-  geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
-  geo.scale(k, k, k);
-  geo.computeVertexNormals();
+  // Le glTF livre du MeshStandardMaterial ; le reste de la scène est éclairé
+  // en Lambert. On convertit en gardant la texture, comme pour la soucoupe.
+  inner.traverse((o) => {
+    if (!o.isMesh) return;
+    const src = o.material;
+    o.material = new THREE.MeshLambertMaterial({
+      map: src.map || null,
+      color: src.map ? 0xffffff : 0xd9d3c4,
+      flatShading: true,
+      side: THREE.FrontSide,
+    });
+    o.castShadow = true;
+    o.receiveShadow = true;
+    // La boîte englobante d'un maillage peauciné est celle de la pose de
+    // liaison : elle ne suit pas l'animation, et la bête clignoterait en bord
+    // de cadre.
+    o.frustumCulled = false;
+  });
 
-  vacheGeo = geo;
-  placerVaches();
-  pret('vaches');
-}, undefined, (err) => console.error('Chargement cow.obj échoué :', err));
+  bete.modele = new THREE.Group();
+  bete.modele.add(inner);
+  bete.clips = Object.fromEntries(gltf.animations.map((a) => [a.name, a]));
+  // Hauteur du gabarit : un lama dépasse largement sa propre longueur, la jauge
+  // et le bouclier ne peuvent pas se régler sur COW_TAILLE seul.
+  bete.hauteur = taille.y * k;
+}
+
+let betesARecevoir = Object.keys(BETES).length;
+for (const bete of Object.values(BETES)) {
+  new GLTFLoader().load(`./assets/${bete.fichier}`, (gltf) => {
+    preparerBete(bete, gltf);
+    if (--betesARecevoir > 0) return;
+    placerVaches();
+    pret('vaches');
+  }, undefined, (err) => console.error(`Chargement ${bete.fichier} échoué :`, err));
+}
 
 // Point du sol correspondant à une position écran (-1..1 en X et Y), par
 // lancer de rayon sur le plan horizontal — exactement comme pour le curseur.
@@ -928,10 +975,12 @@ function mesurerZone() {
 }
 
 function placerVaches() {
+  for (const v of vachesGroup.children) v.userData.mixeur?.stopAllAction();
   vachesGroup.clear();
   jaugesGroup.clear();
   bouclierGroup.clear();
-  if (!vacheGeo) return;
+  const bete = BETES[theme().bete] || BETES.vache;
+  if (!bete.modele) return;
 
   // Le troupeau est tiré en coordonnées écran : toutes les vaches sont donc
   // dans le cadre, condition sine qua non pour que la victoire soit atteignable.
@@ -963,7 +1012,7 @@ function placerVaches() {
     // Un seul tirage pilote à la fois le gabarit et la résistance : la taille
     // de la vache est l'indice visuel de sa difficulté d'enlèvement.
     const resistance = rand(i + 437 + grainNiveau);
-    const scl = THREE.MathUtils.lerp(COW_SCL_MIN, COW_SCL_MAX, resistance) * echelleMonde;
+    const scl = THREE.MathUtils.lerp(COW_SCL_MIN, COW_SCL_MAX, resistance) * echelleMonde * bete.echelle;
     const r = (COW_TAILLE * scl) / 2 + 0.1; // demi-longueur + petite marge
 
     // Encombrement de la bête à l'écran : on ne la pose pas sous un bandeau,
@@ -984,12 +1033,32 @@ function placerVaches() {
     }
     if (!ok) continue; // zone saturée : on renonce plutôt que de superposer
 
-    const vache = new THREE.Mesh(vacheGeo, vachesMats[Math.floor(rand(i + 661 + grainNiveau) * vachesMats.length)]);
+    // Clone profond : squelette et os dupliqués, géométrie et matériau partagés.
+    const vache = clonerSquelette(bete.modele);
     vache.scale.setScalar(scl);
     vache.position.set(x, hauteur(x, z), z);
     vache.rotation.y = rand(i + 97 + grainNiveau) * Math.PI * 2;   // orientation aléatoire
-    vache.castShadow = true;
-    vache.receiveShadow = true;
+
+    // Les deux cycles tournent en permanence ; c'est leur poids respectif qui
+    // décide de ce qu'on voit. Chaque bête démarre à un endroit différent de
+    // son cycle, sinon tout le troupeau respire et marche au même pas.
+    const mixeur = new THREE.AnimationMixer(vache);
+    const actions = {
+      idle: mixeur.clipAction(bete.clips.Idle),
+      marche: mixeur.clipAction(bete.clips.Walk),
+    };
+    actions.idle.play().setEffectiveWeight(1);
+    actions.marche.play().setEffectiveWeight(0);
+    actions.idle.time = rand(i + 5501 + grainNiveau) * bete.clips.Idle.duration;
+    actions.marche.time = rand(i + 6101 + grainNiveau) * bete.clips.Walk.duration;
+    vache.userData.mixeur = mixeur;
+    vache.userData.actions = actions;
+    vache.userData.anim = 'idle';
+    vache.userData.melange = 0;   // 0 = Idle pur, 1 = Walk pur
+    vache.userData.foulee = bete.foulee;
+    // Encombrement vertical : un lama est plus haut que long, le bouclier et la
+    // jauge se règlent sur la plus grande des deux dimensions.
+    vache.userData.encombrement = Math.max(COW_TAILLE, bete.hauteur);
     vache.userData.phase = rand(i + 1777 + grainNiveau) * Math.PI * 2;
     vache.userData.y0 = vache.position.y;
     vache.userData.yaw0 = vache.rotation.y;
@@ -1015,7 +1084,7 @@ function placerVaches() {
     vache.userData.abduite = false;
 
     const jauge = nouvelleJauge();
-    jauge.userData.hauteur = COW_TAILLE * scl * 0.95;   // au-dessus du garrot
+    jauge.userData.hauteur = Math.max(COW_TAILLE * 0.95, bete.hauteur * 1.08) * scl;  // au-dessus du garrot
     jaugesGroup.add(jauge);
     vache.userData.jauge = jauge;
 
@@ -2520,6 +2589,7 @@ function majVacheAuRepos(v, d, t, dt) {
   }
 
   if (t > d.jusqua) choisirOccupation(v, d, t);
+  d.anim = d.etat === 'marche' ? 'marche' : 'idle';
 
   if (d.etat === 'marche') {
     // Cap amené progressivement sur la direction visée.
@@ -2546,27 +2616,23 @@ function majVacheAuRepos(v, d, t, dt) {
       d.jusqua = t + tirerDuree(VACHE_MARCHE);
     }
 
-    // Pas : deux appuis par cycle, d'où le |sin|. La bête rebondit un peu et
-    // se balance d'un flanc sur l'autre.
-    const s = Math.sin(t * VACHE_PAS + d.phase);
+    // Le cycle Walk porte le pas, le roulis et le rebond : plus rien à simuler
+    // ici. On cale juste sa vitesse de lecture sur la distance réellement
+    // parcourue, sinon les sabots patinent sur l'herbe.
+    d.actions.marche.timeScale =
+      THREE.MathUtils.clamp(vitesse / (d.foulee * v.scale.x), 0.5, 4);
     d.y0 = hauteur(v.position.x, v.position.z);
-    v.position.y = d.y0 + Math.abs(s) * 0.035 * v.scale.x;
-    v.rotation.set(s * 0.05, d.yaw0, -0.02 + Math.abs(s) * 0.03);
+    v.position.y = d.y0;
+    v.rotation.set(0, d.yaw0, 0);
     return;
   }
 
-  // Broutage : tête baissée dans l'herbe, petites bouchées et coups de museau.
-  // Le modèle pivote autour de ses pattes : on relève un peu la bête pour
-  // compenser le tangage, sinon les antérieurs s'enfoncent dans le sol.
-  const bouchee = Math.sin(t * 5.4 + d.phase);
-  const tangage = -0.14 + bouchee * 0.04;
+  // Au repos : le cycle Idle porte tout — respiration, balancement de la tête,
+  // ondulation de la queue, frémissement des oreilles. On n'ajoute qu'un lent
+  // balayage du cap, pour que la bête ne reste pas figée dans son axe.
   d.y0 = hauteur(v.position.x, v.position.z);
-  v.position.y = d.y0 - tangage * 0.28 * v.scale.x + Math.sin(t * 1.1 + d.phase) * 0.012;
-  v.rotation.set(
-    Math.sin(t * 0.9 + d.phase) * 0.02,
-    d.yaw0 + Math.sin(t * 1.7 + d.phase) * 0.04,   // elle balaie l'herbe
-    tangage,                                        // museau au sol, qui mâche
-  );
+  v.position.y = d.y0;
+  v.rotation.set(0, d.yaw0 + Math.sin(t * 0.35 + d.phase) * 0.05, 0);
 }
 
 // Bouclier d'une bête : il jaillit quand le faisceau la prend pour cible alors
@@ -2604,7 +2670,7 @@ function majBouclier(v, d, actif, t, dt) {
     bouclierGroup.add(d.bouclier);
   }
 
-  const r = COW_TAILLE * v.scale.x * 0.62;
+  const r = d.encombrement * v.scale.x * 0.62;
   const b = d.bouclier;
   b.visible = true;
   b.position.set(v.position.x, hauteur(v.position.x, v.position.z) + r * 0.72, v.position.z);
@@ -2860,6 +2926,14 @@ function animate() {
   for (const v of vachesGroup.children) {
     const d = v.userData;
     if (d.abduite) continue;
+
+    // Le squelette avance même pendant l'abduction : la bête continue de
+    // s'agiter pendant qu'elle tournoie. Une bête en l'air ne marche pas.
+    const viseMarche = d.anim === 'marche' && d.progres <= 0 ? 1 : 0;
+    d.melange += THREE.MathUtils.clamp(viseMarche - d.melange, -dt / VACHE_FONDU, dt / VACHE_FONDU);
+    d.actions.marche.setEffectiveWeight(d.melange);
+    d.actions.idle.setEffectiveWeight(1 - d.melange);
+    d.mixeur.update(dt);
 
     const sousFaisceau = haloOn &&
       (v.position.x - ufoPivot.position.x) ** 2 + (v.position.z - ufoPivot.position.z) ** 2 < rFaisceau * rFaisceau;
