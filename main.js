@@ -64,6 +64,14 @@ const PYRA_COULEURS = [0x2ea8ff, 0xff3fa4, 0xffc233];   // une teinte par temple
 // jamais descendre dans le bas de l'écran, réservé à l'interface.
 const PYRA_ARC = [-0.05 * Math.PI, 1.05 * Math.PI];
 
+const LAC_PART     = 0.35;  // part de la zone jouable couverte par le lac gelé
+const LAC_BERGE    = 3.2;   // largeur de la berge : raccord du lac au relief
+const LAC_CREUX    = 0.45;  // enfoncement du lac, en fraction de HILL_HEIGHT
+const TANK_GLISSE  = 3.4;   // vitesse d'un blindé qui patine, en multiples de TANK_VIT
+const TANK_REBOND  = 0.85;  // restitution d'un choc entre blindés (1 = parfaitement élastique)
+const TANK_SPIN    = 0.55;  // mise en rotation du châssis heurté, en rad/s par unité de vitesse
+const TANK_SPIN_AMORTI = 1.6;  // décroissance de cette rotation (1/s)
+const TANK_GLISSE_MAX = 1.6;   // plafond de vitesse après chocs, en multiples de la glissade
 const TANK_TAILLE  = 4.6;   // longueur d'un char (unités monde)
 const TANK_DENSITE = 440;   // 1 char par ~440 unités² de zone visible (format de référence)
 const TANK_VIT     = 3.2;   // vitesse d'avance (unités/s)
@@ -259,12 +267,69 @@ scene.add(sun);
 pret('lumieres');
 
 // --------------------------------------------------------- relief de la plaine
+// ------------------------------------------------------------------- lac gelé
+// Niveau de glace : une étendue gelée au centre de la carte, sur laquelle les
+// blindés perdent toute adhérence. Rayon nul = pas de lac sur ce niveau.
+let lacRayon = 0;
+
+// Le lac n'est pas un disque : son rayon ondule avec l'azimut. Une seule
+// harmonique donnerait un galet régulier, d'où cet empilement de fréquences
+// premières entre elles et déphasées — la berge n'a plus aucune symétrie, elle
+// alterne caps et anses. [amplitude, fréquence, phase]
+const LAC_HARMONIQUES = [
+  [0.11, 1, 0.70],   // décentre légèrement la masse : le lac n'est pas posé au compas
+  [0.15, 2, -1.30],  // l'étire en ovale de biais
+  [0.13, 3, 1.10],
+  [0.10, 5, -0.40],
+  [0.07, 7, 2.20],   // dentelle de berge
+  [0.04, 11, 0.95],
+];
+
+function lacOndulation(a) {
+  let u = 1;
+  for (const [amp, freq, phase] of LAC_HARMONIQUES) u += amp * Math.sin(freq * a + phase);
+  return u;
+}
+
+// Rayon tel que l'aire couverte vaille exactement LAC_PART de la zone jouable.
+// Pour r(θ) = R·u(θ), l'aire vaut ½R²∫u². Les fréquences étant des entiers
+// distincts et non nuls, les termes croisés s'annulent sur un tour complet et
+// il ne reste que ∫u² = 2π·(1 + ½Σamp²). Le facteur se déduit donc du tableau
+// ci-dessus : retoucher une harmonique ne désaccorde pas la surface.
+const LAC_FACTEUR_AIRE =
+  1 + LAC_HARMONIQUES.reduce((somme, [amp]) => somme + amp * amp, 0) / 2;
+
+function majLac() {
+  if (!theme().lac) { lacRayon = 0; return; }
+  const aire = zoneAire * theme().lac;
+  lacRayon = Math.sqrt(aire / (Math.PI * LAC_FACTEUR_AIRE));
+}
+
+// Vrai sur la glace. C'est ce test qui décide si un blindé patine, et il porte
+// sur le lac entier — la berge, elle, ne sert qu'au raccord du relief.
+function surLac(x, z) {
+  if (!lacRayon) return false;
+  return Math.hypot(x, z) < lacRayon * lacOndulation(Math.atan2(z, x));
+}
+
+// 1 sur la glace, 0 au-delà de la berge, avec un raccord doux entre les deux :
+// le lac est parfaitement plat et le terrain remonte progressivement autour.
+function lacFacteur(x, z) {
+  if (!lacRayon) return 0;
+  const bord = lacRayon * lacOndulation(Math.atan2(z, x));
+  return 1 - THREE.MathUtils.smoothstep(Math.hypot(x, z), bord, bord + LAC_BERGE);
+}
+
 function hauteur(x, z) {
-  return (
+  const relief = (
     Math.sin(x * 0.25) * Math.cos(z * 0.22) * 0.6 +
     Math.sin(x * 0.11 + z * 0.17) * 0.4 +
     Math.cos(x * 0.43 + 1.7) * Math.sin(z * 0.39) * 0.18
   ) * HILL_HEIGHT;
+  if (!lacRayon) return relief;
+  // La glace est une surface : le relief s'efface complètement dessus, sinon
+  // un blindé lancé dessus sauterait de bosse en bosse.
+  return THREE.MathUtils.lerp(relief, -LAC_CREUX * HILL_HEIGHT, lacFacteur(x, z));
 }
 
 // Étendue monde nécessaire pour que le sol déborde du viewport (fond perdu).
@@ -298,6 +363,20 @@ const NIVEAUX = [
     bete: 'lama',          // on n'enlève pas des vaches dans le désert
     pyramides: true,
     musique: 'flute',      // la plaine avait son banjo, le désert a sa flûte de pan
+  },
+  {
+    nom: 'La banquise',
+    sous: 'Attention au lac : un blindé qui s\u2019y engage part en glissade.',
+    ciel: 0xdce9f2,
+    sol: { h: 0.56, s: 0.14, l: 0.84 },   // neige, à peine bleutée
+    glace: { h: 0.54, s: 0.42, l: 0.72 }, // la glace, plus froide et plus saturée
+    hemisphere: 0x9dbdd4,
+    decor: 'banquise',
+    lac: LAC_PART,         // part de la zone jouable prise par le lac gelé
+    decorRarete: 2.0,      // « quelques » sapins et rochers : deux fois moins qu'ailleurs
+    densiteBete: 0.62,     // troupeau plus fourni : 1 bête par 0,62 × COW_DENSITE
+    betesStatiques: true,  // elles ne déambulent pas, elles tiennent leur poste
+    musique: 'banjo',
   },
 ];
 
@@ -356,17 +435,35 @@ function sujetHaut(scl) {
     return { objet: cactus, rayon: 0.75 * scl, pose: 0 };
   }
 
+  if (theme().decor === 'banquise') {
+    // Sapin sous la neige : deux étages de verdure sombre, coiffés de blanc.
+    const arbre = new THREE.Group();
+    const vert = matiere(0x27624a);
+    const neige = matiere(0xeef5fa);
+    const bas = new THREE.Mesh(new THREE.ConeGeometry(0.85 * scl, 1.6 * scl, 5), vert);
+    bas.position.y = 0.8 * scl;
+    arbre.add(bas);
+    const haut = new THREE.Mesh(new THREE.ConeGeometry(0.58 * scl, 1.3 * scl, 5), vert);
+    haut.position.y = 1.75 * scl;
+    arbre.add(haut);
+    const capuchon = new THREE.Mesh(new THREE.ConeGeometry(0.34 * scl, 0.7 * scl, 5), neige);
+    capuchon.position.y = 2.35 * scl;
+    arbre.add(capuchon);
+    return { objet: arbre, rayon: 0.85 * scl, pose: 0 };
+  }
+
   const sapin = new THREE.Mesh(new THREE.ConeGeometry(0.8 * scl, 2.4 * scl, 5), matiere(0x2f7a4f));
   return { objet: sapin, rayon: 0.8 * scl, pose: 1.2 * scl };
 }
 
 // Caillou : rocher gris en plaine, pierre ocre et plus basse au désert.
 function caillou(scl) {
-  const desert = theme().decor === 'desert';
+  const decor = theme().decor;
+  const desert = decor === 'desert';
   const r = (desert ? 0.4 : 0.55) * scl;
   const pierre = new THREE.Mesh(
     new THREE.DodecahedronGeometry(r, 0),
-    matiere(desert ? 0xb09271 : 0x8d9a8f),
+    matiere(desert ? 0xb09271 : decor === 'banquise' ? 0x7f94a6 : 0x8d9a8f),
   );
   pierre.scale.y = desert ? 0.7 : 1;      // au désert, des galets écrasés
   return { objet: pierre, rayon: r * 1.1, pose: r * 0.45 };
@@ -566,6 +663,17 @@ function construireSol(repeupler = true) {
   const size = half * 2;
   const seg = Math.max(8, Math.round(size / CELL));
 
+  // Le lac se dimensionne sur la zone jouable, et hauteur() s'appuie dessus dès
+  // le premier sommet : il faut donc le connaître avant de mailler quoi que ce
+  // soit. mesurerZone() est idempotente, on la rappelle plus bas sans dommage.
+  // Sur un simple redimensionnement en revanche, on lui reprend echelleMonde :
+  // chars et bêtes sont déjà à l'échelle de l'ancienne mesure, et ce n'est pas
+  // à la reconstruction du tapis de sol de les désaccorder.
+  const echelleAvant = echelleMonde;
+  mesurerZone();
+  if (!repeupler) echelleMonde = echelleAvant;
+  majLac();
+
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2); // passe en XZ, Y = up
 
@@ -583,6 +691,7 @@ function construireSol(repeupler = true) {
   const p = flat.attributes.position;
   const colors = new Float32Array(p.count * 3);
   const base = new THREE.Color();
+  const glace = theme().glace ? new THREE.Color() : null;
   for (let t = 0; t < p.count; t += 3) {
     const y = (p.getY(t) + p.getY(t + 1) + p.getY(t + 2)) / 3;
     const ts = theme().sol;
@@ -591,6 +700,20 @@ function construireSol(repeupler = true) {
       ts.s + Math.abs(y) * 0.05,
       ts.l + y * 0.055 + (t % 9) * 0.004
     );
+    // La glace se substitue à la neige sur l'emprise du lac, et se fond dans la
+    // berge sur la même courbe que le relief : pas de liseré net au raccord.
+    if (glace) {
+      const cx = (p.getX(t) + p.getX(t + 1) + p.getX(t + 2)) / 3;
+      const cz = (p.getZ(t) + p.getZ(t + 1) + p.getZ(t + 2)) / 3;
+      const f = lacFacteur(cx, cz);
+      if (f > 0) {
+        const tg = theme().glace;
+        // Veinures : la glace n'est pas un aplat, elle est craquelée de plus
+        // clair et de plus sombre selon la facette.
+        glace.setHSL(tg.h, tg.s, tg.l + ((t % 13) - 6) * 0.009);
+        base.lerp(glace, f);
+      }
+    }
     for (let k = 0; k < 3; k++) base.toArray(colors, (t + k) * 3);
   }
   flat.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -617,10 +740,13 @@ function construireSol(repeupler = true) {
   decorGroup.clear();
   ruines.length = 0;
   obstacles.length = 0;
-  const n = Math.round((size * size) / 60);
+  const n = Math.round((size * size) / (60 * (theme().decorRarete || 1)));
   for (let i = 0; i < n; i++) {
     const x = (rand(i + 1 + grainNiveau) - 0.5) * (size - 4);
     const z = (rand(i + 91 + grainNiveau) - 0.5) * (size - 4);
+    // Rien ne pousse sur la glace, et rien ne traîne sur la berge : le lac doit
+    // rester une surface dégagée, sans quoi un blindé lancé s'arrêterait dessus.
+    if (lacFacteur(x, z) > 0) continue;
     const haut = rand(i + 311 + grainNiveau) > 0.45;   // sujet haut, ou caillou
     const scl = 0.5 + rand(i + 7 + grainNiveau) * 0.6;
 
@@ -1002,13 +1128,16 @@ function placerVaches() {
   // dans le cadre, condition sine qua non pour que la victoire soit atteignable.
   // L'effectif est celui du format de référence, quel que soit l'écran.
   if (!zoneAire && !mesurerZone()) return;
-  const n = Math.max(3, Math.round(zoneAireRef / COW_DENSITE));
+  const n = Math.max(3, Math.round(zoneAireRef / (COW_DENSITE * (theme().densiteBete || 1))));
   const posees = []; // { x, z, r } des vaches déjà placées
 
   // Une vache est acceptée si son empreinte ne recoupe ni un arbre/rocher,
   // ni une vache déjà posée : tirage avec rejet, jusqu'à ESSAIS tentatives.
   const ESSAIS = 30;
   function libre(x, z, r) {
+    // Pas de bête sur le lac : elle y serait inatteignable au pas, et un blindé
+    // en glissade la traverserait sans pouvoir l'éviter.
+    if (lacFacteur(x, z) > 0) return false;
     for (const o of obstaclesTanks) {
       const d = r + o.r;
       if ((x - o.x) ** 2 + (z - o.z) ** 2 < d * d) return false;
@@ -1258,21 +1387,35 @@ const traceMat = new THREE.ShaderMaterial({
   polygonOffset: true,
   polygonOffsetFactor: -3,
   polygonOffsetUnits: -3,
-  uniforms: { uCouleur: { value: new THREE.Color(0x5c4028) } },   // terre remuée
+  uniforms: {
+    uCouleur: { value: new THREE.Color(0x5c4028) },        // terre remuée
+    // Bleu ciel franc plutôt que pâle : la glace du sol est déjà très claire
+    // (#cce5ec), un bleu plus clair qu'elle s'y noierait — mesuré à 1.07 de
+    // contraste, soit invisible. Celui-ci rend 2.13 tout en restant clair.
+    uCouleurGlace: { value: new THREE.Color(0x6fb9e0) },   // glace rayée par la chenille
+  },
   vertexShader: /* glsl */`
     attribute float aAlpha;
+    attribute float aGlace;
     varying float vAlpha;
+    varying float vGlace;
     void main() {
       vAlpha = aAlpha;
+      vGlace = aGlace;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `,
+  // La teinte est portée par le sommet, pas par le ruban : un blindé qui passe
+  // de la neige à la glace laisse une trace qui change de couleur en chemin,
+  // au bon endroit, sans qu'il faille découper la traînée en deux objets.
   fragmentShader: /* glsl */`
     uniform vec3 uCouleur;
+    uniform vec3 uCouleurGlace;
     varying float vAlpha;
+    varying float vGlace;
     void main() {
       if (vAlpha <= 0.001) discard;
-      gl_FragColor = vec4(uCouleur, vAlpha * 0.85);
+      gl_FragColor = vec4(mix(uCouleur, uCouleurGlace, vGlace), vAlpha * 0.85);
     }
   `,
 });
@@ -1281,6 +1424,7 @@ function nouvelleTrace() {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRACE_PTS * 2 * 3), 3));
   geo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(TRACE_PTS * 2), 1));
+  geo.setAttribute('aGlace', new THREE.BufferAttribute(new Float32Array(TRACE_PTS * 2), 1));
 
   // Bande de quads : (2i, 2i+1, 2i+3) + (2i, 2i+3, 2i+2).
   const idx = [];
@@ -1301,13 +1445,16 @@ function majTrace(trace, x, z, nx, nz, t) {
   const pts = trace.pts;
   const dernier = pts[pts.length - 1];
   if (!dernier || (x - dernier.x) ** 2 + (z - dernier.z) ** 2 > TRACE_PAS * TRACE_PAS) {
-    pts.push({ x, z, t, nx, nz });
+    // Nature du sol relevée au dépôt, et non à l'affichage : la trace garde la
+    // couleur de l'endroit où elle a été laissée.
+    pts.push({ x, z, t, nx, nz, glace: lacFacteur(x, z) });
     if (pts.length > TRACE_PTS) pts.shift();
   }
   if (pts.length < 2) return;
 
   const pos = trace.mesh.geometry.attributes.position;
   const alp = trace.mesh.geometry.attributes.aAlpha;
+  const gla = trace.mesh.geometry.attributes.aGlace;
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i];
     const w = (TRACE_LARG * echelleMonde) / 2;
@@ -1324,10 +1471,89 @@ function majTrace(trace, x, z, nx, nz, t) {
     const bout = Math.min(1, i / 2);
     alp.setX(i * 2, a * bout);
     alp.setX(i * 2 + 1, a * bout);
+    gla.setX(i * 2, p.glace);
+    gla.setX(i * 2 + 1, p.glace);
   }
   pos.needsUpdate = true;
   alp.needsUpdate = true;
+  gla.needsUpdate = true;
   trace.mesh.geometry.setDrawRange(0, (pts.length - 1) * 6);
+}
+
+// ------------------------------------------------------------------- chocs
+// Collision entre blindés sur la glace. Un char qui patine n'a plus aucune
+// adhérence : il percute, et l'échange se règle comme un choc à deux masses
+// égales — seule la composante normale (le long de la ligne des centres) est
+// échangée, la composante tangentielle est conservée. Un char resté sur la
+// neige est en revanche agrippé : il fait mur, et le glisseur rebondit dessus.
+function heurterBlindes(tk) {
+  if (!lacRayon) return;                     // pas de glace, pas de patinage
+  const p = tk.racine.position;
+  const rayon = TANK_TAILLE * 0.55 * echelleMonde;
+  const dmin = rayon * 2;
+  const vmax = TANK_VIT * TANK_GLISSE * TANK_GLISSE_MAX;
+
+  for (const autre of tanks) {
+    if (autre === tk || !autre.actif) continue;
+    // Il faut qu'au moins l'un des deux patine : deux chars sur la neige se
+    // débrouillent avec la séparation douce, qui ne les fait pas rebondir.
+    if (!tk.glisse && !autre.glisse) continue;
+
+    const q = autre.racine.position;
+    let nx = q.x - p.x, nz = q.z - p.z;
+    const d = Math.hypot(nx, nz);
+    if (d >= dmin || d < 1e-6) continue;
+    nx /= d; nz /= d;
+
+    const surGlaceA = surLac(p.x, p.z);
+    const surGlaceB = surLac(q.x, q.z);
+    if (!surGlaceA) continue;        // nous sommes agrippés : l'autre nous heurte, pas l'inverse
+
+    // Décollement, qu'ils se rapprochent ou non : deux châssis ne doivent jamais
+    // rester imbriqués, pas même le temps de se séparer. Le char agrippé à la
+    // neige ne cède pas, le glisseur encaisse alors tout l'écart.
+    const chevauche = dmin - d;
+    if (surGlaceB) {
+      p.x -= nx * chevauche / 2; p.z -= nz * chevauche / 2;
+      q.x += nx * chevauche / 2; q.z += nz * chevauche / 2;
+    } else {
+      p.x -= nx * chevauche; p.z -= nz * chevauche;
+    }
+
+    const va = tk.glisse || { x: 0, z: 0 };
+    const vb = autre.glisse || { x: 0, z: 0 };
+    // Vitesse d'approche. Négative ou nulle : ils s'éloignent déjà, et rebondir
+    // une seconde fois les collerait l'un à l'autre.
+    const appro = (va.x - vb.x) * nx + (va.z - vb.z) * nz;
+    if (appro <= 0) continue;
+
+    const borner = (v) => {
+      const m = Math.hypot(v.x, v.z);
+      if (m > vmax) { v.x = (v.x / m) * vmax; v.z = (v.z / m) * vmax; }
+      return v;
+    };
+
+    if (surGlaceB) {
+      // Deux patineurs : chacun prend la moitié de l'impulsion.
+      const j = appro * (1 + TANK_REBOND) / 2;
+      tk.glisse = borner({ x: va.x - j * nx, z: va.z - j * nz });
+      autre.glisse = borner({ x: vb.x + j * nx, z: vb.z + j * nz });
+    } else {
+      // L'autre est agrippé à la neige : il fait mur, le glisseur repart dessus.
+      const j = appro * (1 + TANK_REBOND);
+      tk.glisse = borner({ x: va.x - j * nx, z: va.z - j * nz });
+    }
+
+    // Le châssis part en vrille : la mise en rotation suit la composante
+    // tangentielle du choc, celle qui n'est pas absorbée par le rebond.
+    const tang = (va.x - vb.x) * -nz + (va.z - vb.z) * nx;
+    tk.spin = (tk.spin || 0) - tang * TANK_SPIN;
+    if (surGlaceB) autre.spin = (autre.spin || 0) + tang * TANK_SPIN;
+
+
+    // Gerbe de glace, pour que le choc se voie.
+    exploser(new THREE.Vector3((p.x + q.x) / 2, hauteur(p.x, p.z) + 0.6, (p.z + q.z) / 2), 1.6, 0.3);
+  }
 }
 
 function nouveauTank() {
@@ -1452,6 +1678,8 @@ function placerTanks() {
     t.racine.rotation.y = t.cap;
 
     // Ceux déjà dans le cadre engagent tout de suite, les autres attendent.
+    t.glisse = null;        // aucune glissade en cours au premier tour
+    t.spin = 0;             // ni vrille héritée d'un choc
     t.actif = dansEcran(t.racine.position);
     if (!t.actif) t.ordreAttente = tanksEnAttente++;
     tanksGroup.add(t.racine);
@@ -2614,6 +2842,18 @@ function majVacheAuRepos(v, d, t, dt) {
     d.jusqua = -1;               // décision immédiate, dans un sens comme dans l'autre
   }
 
+  // Niveau où le troupeau tient son poste : aucune déambulation, chaque bête
+  // reste où elle a été posée et joue son cycle Idle. Elle continue en revanche
+  // de se tourner lentement, pour ne pas avoir l'air d'une statue.
+  if (theme().betesStatiques) {
+    d.etat = 'broute';
+    d.anim = 'idle';
+    d.y0 = hauteur(v.position.x, v.position.z);
+    v.position.y = d.y0;
+    v.rotation.set(0, d.yaw0 + Math.sin(t * 0.35 + d.phase) * 0.05, 0);
+    return;
+  }
+
   if (t > d.jusqua) choisirOccupation(v, d, t);
   d.anim = d.etat === 'marche' ? 'marche' : 'idle';
 
@@ -2829,39 +3069,90 @@ function animate() {
     let dz = ufoPivot.position.z - p.z;
     let dist = Math.hypot(dx, dz);
 
-    // Cap visé, corrigé pour contourner arbres, rochers et vaches.
-    const capVise = Math.atan2(dx, dz) + eviterObstacles(tk, p, dt, t);
-    let dCap = capVise - tk.cap;
-    dCap = Math.atan2(Math.sin(dCap), Math.cos(dCap));
-    tk.cap += THREE.MathUtils.clamp(dCap, -TANK_ROT * dt, TANK_ROT * dt);
-
+    // Le châssis garde son cap pendant une glissade : le blindé part tout droit
+    // dans l'axe qu'il avait, chenilles patinant dans le vide.
     const avant = new THREE.Vector2(Math.sin(tk.cap), Math.cos(tk.cap));
 
-    // Hors de portée : il avance. Trop près : il recule. Le blindé ne se
-    // déplace vraiment que s'il est à peu près face à sa cible.
-    let marche = 0;
-    if (dist > porteeTank) marche = 1;
-    else if (dist < porteeTank * 0.6) marche = -0.6;
-    // En contournement il conserve de l'élan : sinon il s'arrête net, de biais
-    // face à l'arbre, et reste planté là.
-    marche *= THREE.MathUtils.clamp(Math.cos(dCap), tk.evite ? 0.45 : 0, 1);
+    if (tk.glisse) {
+      // --- en glissade : plus de pilotage, une trajectoire rectiligne jusqu'à
+      // retrouver de la neige. Ni contournement, ni séparation — sur la glace
+      // il ne décide plus de rien. Seul un choc peut encore le dévier.
+      // Vrille héritée d'un choc : le châssis tourne sur lui-même, mais la
+      // trajectoire, elle, reste celle de la vitesse — il part en travers.
+      if (tk.spin) {
+        tk.cap += tk.spin * dt;
+        tk.spin *= Math.max(0, 1 - TANK_SPIN_AMORTI * dt);
+        if (Math.abs(tk.spin) < 0.01) tk.spin = 0;
+        avant.set(Math.sin(tk.cap), Math.cos(tk.cap));
+      }
+      const nx = p.x + tk.glisse.x * dt;
+      const nz = p.z + tk.glisse.z * dt;
+      p.x = THREE.MathUtils.clamp(nx, -limiteTank, limiteTank);
+      p.z = THREE.MathUtils.clamp(nz, -limiteTank, limiteTank);
+      // Reprise d'adhérence : le sol stable, ou le bord du monde s'il y butait.
+      // Troisième cas : les chocs l'ont vidé de son élan. Un char qui dérive
+      // moins vite qu'il ne roulerait n'ira jamais jusqu'à la berge et resterait
+      // planté au milieu du lac, sans pouvoir manœuvrer puisqu'il patine. On lui
+      // rend la main : il va gratter sur place, puis repartir de plus belle.
+      const elan = Math.hypot(tk.glisse.x, tk.glisse.z);
+      if (!surLac(p.x, p.z) || p.x !== nx || p.z !== nz || elan < TANK_VIT) {
+        tk.glisse = null;
+        tk.spin = 0;
+      }
+      voixTanks.push({ x: tk.ecranX, y: tk.ecranY, marche: 1 });
+    } else {
+      // Cap visé, corrigé pour contourner arbres, rochers et vaches.
+      const capVise = Math.atan2(dx, dz) + eviterObstacles(tk, p, dt, t);
+      let dCap = capVise - tk.cap;
+      dCap = Math.atan2(Math.sin(dCap), Math.cos(dCap));
+      tk.cap += THREE.MathUtils.clamp(dCap, -TANK_ROT * dt, TANK_ROT * dt);
+      avant.set(Math.sin(tk.cap), Math.cos(tk.cap));
 
-    // Séparation : deux chars ne se marchent pas dessus.
-    let sx = 0, sz = 0;
-    for (const autre of tanks) {
-      if (autre === tk) continue;
-      const ax = p.x - autre.racine.position.x;
-      const az = p.z - autre.racine.position.z;
-      const d2 = ax * ax + az * az;
-      if (d2 > 0.01 && d2 < 25) { const d = Math.sqrt(d2); sx += ax / d; sz += az / d; }
+      // Hors de portée : il avance. Trop près : il recule. Le blindé ne se
+      // déplace vraiment que s'il est à peu près face à sa cible.
+      let marche = 0;
+      if (dist > porteeTank) marche = 1;
+      else if (dist < porteeTank * 0.6) marche = -0.6;
+      // En contournement il conserve de l'élan : sinon il s'arrête net, de biais
+      // face à l'arbre, et reste planté là.
+      marche *= THREE.MathUtils.clamp(Math.cos(dCap), tk.evite ? 0.45 : 0, 1);
+
+      // Séparation : deux chars ne se marchent pas dessus.
+      let sx = 0, sz = 0;
+      for (const autre of tanks) {
+        if (autre === tk) continue;
+        const ax = p.x - autre.racine.position.x;
+        const az = p.z - autre.racine.position.z;
+        const d2 = ax * ax + az * az;
+        if (d2 > 0.01 && d2 < 25) { const d = Math.sqrt(d2); sx += ax / d; sz += az / d; }
+      }
+
+      voixTanks.push({ x: tk.ecranX, y: tk.ecranY, marche: Math.abs(marche) });
+
+      const ax0 = p.x, az0 = p.z;
+      if (marche !== 0 || sx || sz) {
+        p.x = THREE.MathUtils.clamp(p.x + (avant.x * marche + sx * 0.6) * TANK_VIT * dt, -limiteTank, limiteTank);
+        p.z = THREE.MathUtils.clamp(p.z + (avant.y * marche + sz * 0.6) * TANK_VIT * dt, -limiteTank, limiteTank);
+      }
+
+      // --- il vient de mettre une chenille sur la glace : la glissade s'amorce
+      // dans la direction exacte qu'il suivait à cet instant — celle de son
+      // déplacement réel, qui n'est pas son cap s'il reculait ou s'écartait d'un
+      // voisin. Un char à l'arrêt sur la glace n'a aucune raison de partir.
+      if (surLac(p.x, p.z)) {
+        const mx = p.x - ax0, mz = p.z - az0;
+        const m = Math.hypot(mx, mz);
+        if (m > 1e-6) {
+          const v = TANK_VIT * TANK_GLISSE;
+          tk.glisse = { x: (mx / m) * v, z: (mz / m) * v };
+        }
+      }
     }
 
-    voixTanks.push({ x: tk.ecranX, y: tk.ecranY, marche: Math.abs(marche) });
+    // Chocs entre blindés, une fois le déplacement de l'image appliqué : c'est
+    // là que la trajectoire de glissade peut encore être déviée.
+    heurterBlindes(tk);
 
-    if (marche !== 0 || sx || sz) {
-      p.x = THREE.MathUtils.clamp(p.x + (avant.x * marche + sx * 0.6) * TANK_VIT * dt, -limiteTank, limiteTank);
-      p.z = THREE.MathUtils.clamp(p.z + (avant.y * marche + sz * 0.6) * TANK_VIT * dt, -limiteTank, limiteTank);
-    }
     p.y = hauteur(p.x, p.z);
 
     // Assiette : tangage et roulis lus sur la pente sous les chenilles.
