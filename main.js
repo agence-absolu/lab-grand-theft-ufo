@@ -26,8 +26,6 @@ const FRUSTUM      = 18;    // "zoom" de la caméra orthographique
 // Pointeur grossier (doigt) : le jeu se pilote au pouce, pas à la souris.
 const tactile = matchMedia('(pointer: coarse)').matches;
 
-console.log('test', FRUSTUM)
-
 const COW_DENSITE  = 260;   // 1 vache par ~260 unités² de zone visible (format de référence)
 const ASPECT_REF   = 16 / 9; // format "desktop" servant d'étalon au peuplement : sous ce
                             // ratio (mobile en portrait), l'effectif est maintenu et les
@@ -893,9 +891,18 @@ function preparerBete(bete, gltf) {
 
   // Le glTF livre du MeshStandardMaterial ; le reste de la scène est éclairé
   // en Lambert. On convertit en gardant la texture, comme pour la soucoupe.
+  // Filtrage anisotrope : vue de trois quarts, le flanc de la bête est très
+  // incliné par rapport à l'écran. Le mipmapping isotrope choisit alors un
+  // niveau calé sur la direction la plus comprimée et bave sur l'autre — d'où
+  // la texture pâteuse. L'anisotropie fait l'échantillonnage dans le bon sens.
+  const anisotropieMax = renderer.capabilities.getMaxAnisotropy();
   inner.traverse((o) => {
     if (!o.isMesh) return;
     const src = o.material;
+    if (src.map) {
+      src.map.anisotropy = anisotropieMax;
+      src.map.needsUpdate = true;
+    }
     o.material = new THREE.MeshLambertMaterial({
       map: src.map || null,
       color: src.map ? 0xffffff : 0xd9d3c4,
@@ -2350,7 +2357,14 @@ const ROSE = new THREE.Color(0xff8fb4);
 const teinte = new THREE.Color();
 let degatsJusqua = -1;
 
+// Invincibilité de mise au point. Seul le bloc debug en fin de fichier lève ce
+// drapeau, et ce bloc est absent du bundle de production : en prod la valeur
+// reste false pour toujours. Les missiles touchent et explosent quand même,
+// seuls la perte de bouclier et le compteur de touches sont neutralisés.
+let invincible = false;
+
 function encaisser() {
+  if (invincible) return;
   if (ufoDetruit || victoire >= 0) return;
   if (clock.elapsedTime < degatsJusqua) return;   // déjà en train d'absorber
   degatsJusqua = clock.elapsedTime + DEGAT_DUREE;
@@ -3326,18 +3340,107 @@ for (const b of document.querySelectorAll('.rejouer')) {
 }
 
 // ------------------------------------------------------------------- debug
-// Raccourci de mise au point : la touche N bascule immédiatement sur le niveau
-// suivant, sans attendre que le troupeau soit enlevé, et boucle sur le premier
-// une fois le dernier atteint. Réservé au serveur de développement : dans le
-// bundle de production, ce bloc n'existe pas — un joueur ne doit pas sauter un
-// niveau d'une frappe au clavier.
+// Outils de mise au point : sauter d'un niveau à l'autre sans attendre que le
+// troupeau soit enlevé, au clavier (N / P) ou par une barre de boutons en bas
+// de l'écran. Le tout boucle : après le dernier niveau on revient au premier.
+// Réservé au serveur de développement : dans le bundle de production ce bloc
+// n'existe pas — un joueur ne doit pas sauter un niveau d'un clic.
 if (import.meta.env.DEV) {
+  // Les mêmes verrous que le passage de niveau normal : pas de saut pendant
+  // une transition, une fois la soucoupe détruite ou l'écran de victoire posé.
+  const sautPossible = () => demarre && !gel && !ufoDetruit && victoire < 0;
+  const sauterNiveau = (pas) => {
+    if (!sautPossible()) return;
+    const n = NIVEAUX.length;
+    entrerNiveau(((niveauJeu + pas) % n + n) % n);   // modulo qui tient le -1
+  };
+
   addEventListener('keydown', (ev) => {
     if (saisieEnCours(ev)) return;
-    if (ev.key !== 'n' && ev.key !== 'N') return;
-    if (!demarre || gel || ufoDetruit || victoire >= 0) return;
-    entrerNiveau((niveauJeu + 1) % NIVEAUX.length);
+    const k = ev.key.toLowerCase();
+    if (k === 'i') { basculerInvincible(); return; }
+    if (k !== 'n' && k !== 'p') return;
+    sauterNiveau(k === 'n' ? +1 : -1);
   });
+
+  // Barre posée à gauche du bouton de son, qu'elle ne doit pas recouvrir.
+  const barre = document.createElement('div');
+  barre.id = 'debug-niveaux';
+  barre.style.cssText = `
+    position: fixed; right: 74px; bottom: 18px; z-index: 6;
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 4px 4px 10px; border-radius: 999px;
+    background: rgba(255, 255, 255, .62); backdrop-filter: blur(6px);
+    box-shadow: 0 2px 10px rgba(30, 60, 45, .12);
+    font: 700 12px/1 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+    color: #24402f; user-select: none;`;
+
+  const etiquette = document.createElement('span');
+  etiquette.style.cssText = 'font-variant-numeric: tabular-nums; opacity: .7;';
+  barre.appendChild(etiquette);
+
+  const bouton = (texte, infobulle, action) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = texte;
+    b.title = infobulle;
+    b.style.cssText = `
+      width: 28px; height: 28px; border: 0; border-radius: 50%;
+      cursor: pointer; font: inherit; font-size: 13px;
+      background: rgba(255, 255, 255, .8); color: #24402f;
+      transition: transform .15s ease-out, background-color .15s linear;`;
+    // Survol en échelle plutôt qu'en couleur : la couleur du cœur porte déjà
+    // l'état d'invincibilité, un effet de fond l'écraserait.
+    b.addEventListener('mouseenter', () => { b.style.transform = 'scale(1.12)'; });
+    b.addEventListener('mouseleave', () => { b.style.transform = 'none'; });
+    // Sans ça le bouton garde le focus et avale les touches du jeu.
+    b.addEventListener('mousedown', (ev) => ev.preventDefault());
+    b.addEventListener('click', () => { action(); b.blur(); });
+    barre.appendChild(b);
+    return b;
+  };
+  const prec = bouton('\u25c0', 'Niveau précédent (P)', () => sauterNiveau(-1));
+  const suiv = bouton('\u25b6', 'Niveau suivant (N)', () => sauterNiveau(+1));
+
+  // --- invincibilité, à bascule (bouton ou touche I)
+  const separateur = document.createElement('span');
+  separateur.style.cssText = 'width: 1px; height: 16px; background: rgba(36, 64, 47, .22);';
+  barre.appendChild(separateur);
+
+  const basculerInvincible = () => {
+    invincible = !invincible;
+    // Un missile en vol peut avoir déjà déclenché l'absorption : on rend la
+    // main tout de suite pour que la soucoupe cesse de clignoter en rouge.
+    if (invincible) degatsJusqua = -1;
+    majInvincible();
+  };
+  const bInvincible = bouton('\u2665', '', basculerInvincible);
+  function majInvincible() {
+    bInvincible.textContent = invincible ? '\u2665' : '\u2661';
+    bInvincible.title = invincible
+      ? 'Soucoupe immortelle — cliquer pour rétablir les dégâts (I)'
+      : 'Rendre la soucoupe immortelle (I)';
+    bInvincible.style.background = invincible ? '#ff8fb4' : 'rgba(255, 255, 255, .8)';
+    bInvincible.style.color = invincible ? '#fff' : '#24402f';
+  }
+  majInvincible();
+
+  // Rafraîchi à l'image : le niveau courant change aussi par le jeu lui-même,
+  // et les boutons doivent se griser pendant les transitions.
+  const majBarre = () => {
+    etiquette.textContent = `Niv ${niveauJeu + 1}/${NIVEAUX.length}`;
+    const ouvert = sautPossible();
+    for (const b of [prec, suiv]) {
+      b.disabled = !ouvert;
+      b.style.opacity = ouvert ? 1 : .35;
+      b.style.cursor = ouvert ? 'pointer' : 'default';
+    }
+    // L'invincibilité reste basculable à tout moment, même entre deux niveaux.
+    if (bInvincible.textContent !== (invincible ? '\u2665' : '\u2661')) majInvincible();
+    requestAnimationFrame(majBarre);
+  };
+  document.body.appendChild(barre);
+  majBarre();
 }
 
 renderer.setAnimationLoop(animate);
