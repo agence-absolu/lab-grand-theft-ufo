@@ -374,8 +374,8 @@ const NIVEAUX = [
     decor: 'banquise',
     lac: LAC_PART,         // part de la zone jouable prise par le lac gelé
     decorRarete: 2.0,      // « quelques » sapins et rochers : deux fois moins qu'ailleurs
+    bete: 'bonhomme',      // sur la banquise on enlève des bonshommes de neige
     densiteBete: 0.62,     // troupeau plus fourni : 1 bête par 0,62 × COW_DENSITE
-    betesStatiques: true,  // elles ne déambulent pas, elles tiennent leur poste
     musique: 'banjo',
   },
 ];
@@ -734,7 +734,14 @@ function construireSol(repeupler = true) {
   // Redimensionnement en cours de partie (rotation de l'écran, barre d'adresse
   // qui se replie sur mobile) : seul le tapis de sol est refait. Décor, troupeau
   // et blindés restent en place — sinon la partie repartirait de zéro.
-  if (!repeupler) return;
+  if (!repeupler) {
+    // Le lac se redimensionne avec la zone jouable, donc le relief change sous
+    // les traînées déjà posées. Leurs altitudes étant figées au dépôt, on les
+    // oublie plutôt que de les laisser flotter : elles se redessinent en un
+    // tour de chenille.
+    oublierTraces();
+    return;
+  }
 
   // Décor redistribué sur toute l'étendue, densité constante.
   decorGroup.clear();
@@ -883,8 +890,12 @@ function majScore(pop, gain) {
 //             que `scale` reste la référence des calculs d'encombrement.
 //   foulee  : distance couverte par un cycle Walk, patron à l'échelle 1.
 const BETES = {
-  vache: { fichier: 'cow.glb',  echelle: 1.00, foulee: 0.279 },
-  lama:  { fichier: 'lama.glb', echelle: 0.70, foulee: 0.404 },
+  vache:    { fichier: 'cow.glb',     echelle: 1.00, foulee: 0.279 },
+  lama:     { fichier: 'lama.glb',    echelle: 0.70, foulee: 0.404 },
+  // Le bonhomme de neige ne marche pas : il saute. Son cycle de déplacement
+  // s'appelle donc Bounce, et pas Walk comme chez les quadrupèdes. L'échelle
+  // 0.85 le met à 1.19 de haut, soit la hauteur d'une vache.
+  bonhomme: { fichier: 'snowman.glb', echelle: 0.85, foulee: 0.350, clipMarche: 'Bounce' },
 };
 // Toutes les bêtes partagent la robe peinte du modèle : seule l'échelle les
 // distingue, et c'est elle qui annonce leur résistance à l'enlèvement.
@@ -1188,14 +1199,17 @@ function placerVaches() {
     // décide de ce qu'on voit. Chaque bête démarre à un endroit différent de
     // son cycle, sinon tout le troupeau respire et marche au même pas.
     const mixeur = new THREE.AnimationMixer(vache);
+    // Le cycle de déplacement s'appelle Walk chez les quadrupèdes et Bounce
+    // chez le bonhomme de neige : c'est la bête qui dit lequel est le sien.
+    const clipMarche = bete.clips[bete.clipMarche || 'Walk'];
     const actions = {
       idle: mixeur.clipAction(bete.clips.Idle),
-      marche: mixeur.clipAction(bete.clips.Walk),
+      marche: mixeur.clipAction(clipMarche),
     };
     actions.idle.play().setEffectiveWeight(1);
     actions.marche.play().setEffectiveWeight(0);
     actions.idle.time = rand(i + 5501 + grainNiveau) * bete.clips.Idle.duration;
-    actions.marche.time = rand(i + 6101 + grainNiveau) * bete.clips.Walk.duration;
+    actions.marche.time = rand(i + 6101 + grainNiveau) * clipMarche.duration;
     vache.userData.mixeur = mixeur;
     vache.userData.actions = actions;
     vache.userData.anim = 'idle';
@@ -1420,6 +1434,17 @@ const traceMat = new THREE.ShaderMaterial({
   `,
 });
 
+// Vide les traînées sans détruire leurs maillages : les blindés en gardent la
+// référence, c'est la file de points qui repart à zéro.
+function oublierTraces() {
+  for (const tk of tanks) {
+    for (const tr of tk.traces || []) {
+      tr.pts.length = 0;
+      tr.mesh.geometry.setDrawRange(0, 0);
+    }
+  }
+}
+
 function nouvelleTrace() {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRACE_PTS * 2 * 3), 3));
@@ -1445,9 +1470,19 @@ function majTrace(trace, x, z, nx, nz, t) {
   const pts = trace.pts;
   const dernier = pts[pts.length - 1];
   if (!dernier || (x - dernier.x) ** 2 + (z - dernier.z) ** 2 > TRACE_PAS * TRACE_PAS) {
-    // Nature du sol relevée au dépôt, et non à l'affichage : la trace garde la
-    // couleur de l'endroit où elle a été laissée.
-    pts.push({ x, z, t, nx, nz, glace: lacFacteur(x, z) });
+    // Tout ce qui ne dépendra plus du temps est figé ici, au dépôt : les deux
+    // sommets du ruban, leur altitude sur le relief, et la nature du sol. Un
+    // point déposé ne bouge plus jamais — les recalculer à chaque image coûtait
+    // 3240 appels à hauteur() par image pour retrouver les mêmes valeurs.
+    // Seule l'opacité, qui décroît avec l'âge, est encore calculée à l'affichage.
+    const w = (TRACE_LARG * echelleMonde) / 2;
+    const ax = x - nx * w, az = z - nz * w;
+    const bx = x + nx * w, bz = z + nz * w;
+    pts.push({
+      x, z, t, glace: lacFacteur(x, z),
+      ax, ay: hauteur(ax, az) + 0.035, az,
+      bx, by: hauteur(bx, bz) + 0.035, bz,
+    });
     if (pts.length > TRACE_PTS) pts.shift();
   }
   if (pts.length < 2) return;
@@ -1457,15 +1492,8 @@ function majTrace(trace, x, z, nx, nz, t) {
   const gla = trace.mesh.geometry.attributes.aGlace;
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i];
-    const w = (TRACE_LARG * echelleMonde) / 2;
-    // Normale latérale mémorisée au dépôt : le ruban garde sa largeur même
-    // quand le char tourne ou repart en sens inverse.
-    for (let c = 0; c < 2; c++) {
-      const sgn = c === 0 ? -1 : 1;
-      const px = p.x + p.nx * w * sgn;
-      const pz = p.z + p.nz * w * sgn;
-      pos.setXYZ(i * 2 + c, px, hauteur(px, pz) + 0.035, pz);
-    }
+    pos.setXYZ(i * 2, p.ax, p.ay, p.az);
+    pos.setXYZ(i * 2 + 1, p.bx, p.by, p.bz);
     // Effacement progressif, avec une pointe atténuée en queue de ruban.
     const a = Math.max(0, 1 - (t - p.t) / TRACE_DUREE);
     const bout = Math.min(1, i / 2);
