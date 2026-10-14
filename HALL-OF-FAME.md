@@ -75,11 +75,12 @@ n'est visible que sur l'appareil du joueur.
 ## Ce que l'Edge Function garantit — et ce qu'elle ne garantit pas
 
 Elle refuse (422) les scores incohérents avec les règles du jeu : plus de points
-que le troupeau enlevé ne peut en rapporter, plus de missiles encaissés qu'une
-partie gagnée ne le permet — les vies étant refaites à chaque niveau, le plafond
-vaut (vies − 1) × nombre de niveaux, soit quatre aujourd'hui —, durée trop
-courte pour le nombre de vaches, valeurs
-négatives ou non entières. Elle limite aussi à cinq envois par minute et par
+que le troupeau enlevé ne peut en rapporter, durée trop courte pour le nombre
+de vaches, valeurs négatives ou non entières. Le nombre de missiles encaissés
+n'a qu'un plafond très large (vies × un nombre de niveaux pris avec marge) :
+comme chaque missile fait baisser le multiplicateur, en déclarer trop ne
+profite à personne, et un plafond serré se périme au premier niveau ajouté —
+il refusait alors les parties honnêtes. Elle limite aussi à cinq envois par minute et par
 appareil (429).
 
 Elle ne rend pas la triche impossible. Le score reste calculé dans le

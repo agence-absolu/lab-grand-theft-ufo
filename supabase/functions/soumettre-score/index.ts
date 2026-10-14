@@ -14,12 +14,18 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 const MAX_NOM = 16;
 const MAX_CAPTURES = 200;     // troupeau généreux : la densité dépend du viewport
 const PTS_PAR_VACHE = 10;     // vache la plus coriace (5) × multiplicateur max (2)
-// Les vies sont refaites à chaque passage de niveau : une partie gagnée peut
-// donc encaisser (VIES - 1) missiles par niveau traversé. À tenir à jour si le
-// nombre de vies ou de niveaux change dans le jeu.
+// Les vies sont refaites à chaque passage de niveau : une partie encaisse donc
+// (VIES - 1) missiles par niveau traversé, plus VIES sur celui qui l'achève —
+// un score est envoyé aussi bien après une défaite qu'après une victoire.
+//
+// Ce plafond n'est pas une barrière anti-triche : chaque missile encaissé ne
+// fait que baisser le multiplicateur du joueur, donc en déclarer plus qu'on
+// n'en a pris, c'est se pénaliser. Il ne sert qu'à écarter les valeurs absurdes,
+// et il est pris large exprès : un plafond serré se périme au premier niveau
+// ajouté et recale alors des parties honnêtes.
 const VIES = 3;
-const NIVEAUX = 2;
-const MAX_TOUCHES = (VIES - 1) * NIVEAUX;
+const MAX_NIVEAUX = 12;       // bien au-delà des niveaux existants, et des suivants
+const MAX_TOUCHES = VIES * MAX_NIVEAUX;
 const SEC_PAR_VACHE = 0.3;    // plancher de durée : enlever une vache prend du temps
 const MAX_DUREE = 3 * 3600;   // trois heures : au-delà, la valeur n'a plus de sens
 const FENETRE_MS = 60_000;    // fenêtre du garde-fou de cadence
@@ -58,7 +64,7 @@ function invalider(s: { points: number; captures: number; touches: number; duree
   if (entiers.some((v) => !Number.isInteger(v) || v < 0)) return 'valeurs invalides';
   if (s.captures < 1 || s.captures > MAX_CAPTURES) return 'nombre de vaches invalide';
   if (s.touches > MAX_TOUCHES) {
-    return `une partie gagnée encaisse au plus ${MAX_TOUCHES} missiles`;
+    return `une partie encaisse au plus ${MAX_TOUCHES} missiles`;
   }
   if (s.duree > MAX_DUREE) return 'durée invalide';
   // Le plafond de points découle du barème : chaque vache vaut au mieux 5 points,
