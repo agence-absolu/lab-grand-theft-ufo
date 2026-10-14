@@ -1,7 +1,8 @@
 // Bande-son complète, synthétisée en direct — aucun fichier audio.
 //
 //   1. l'accompagnement — banjo bluegrass dans la plaine, flûte de pan dans le
-//      désert — qui s'emballe avec l'arrivée des blindés ;
+//      désert, carillon sur la banquise — qui s'emballe avec l'arrivée des
+//      blindés ;
 //   2. un bourdon soucoupe à trémolo, qui s'intensifie quand l'OVNI file ;
 //   3. le zap du faisceau, dont la hauteur monte avec l'avancement de l'abduction.
 //
@@ -267,17 +268,96 @@ function programmerFlute(temps, dans, accord, basse) {
   if (dans % 8 === 4) contrebasse(basse, temps);     // pouls grave, comme au banjo
 }
 
-function programmer(temps) {
-  const mesure = Math.floor(pas / 16) % GRILLE.length;
-  const dans = pas % 16;
-  const { accord, basse } = GRILLE[mesure];
+// ------------------------------------------------------- carillon de givre
+// Cloches tubulaires : des partiels inharmoniques (2.76, 5.40, 8.93 × la
+// fondamentale — le spectre mesuré d'une cloche) avec une attaque instantanée
+// et une queue très longue. C'est l'inharmonicité qui fait la cloche ; une
+// simple octave sonnerait comme un orgue.
+const CARILLON_VOL = 0.30;
+const PARTIELS = [[1, 1], [2.76, 0.42], [5.40, 0.18], [8.93, 0.08]];
 
-  if (ambiance === 'flute') {
-    programmerFlute(temps, dans, accord, basse);
-    pas++;
-    return;
+function cloche(freq, temps, duree, niveau) {
+  // Un rien de bois à l'impact : le marteau avant la résonance.
+  const choc = ctx.createBufferSource();
+  choc.buffer = bufferSouffle();
+  choc.playbackRate.value = 1.4 + Math.random() * 0.3;
+  const aigu = ctx.createBiquadFilter();
+  aigu.type = 'highpass';
+  aigu.frequency.value = freq * 3;
+  const gChoc = ctx.createGain();
+  gChoc.gain.setValueAtTime(niveau * 0.5, temps);
+  gChoc.gain.exponentialRampToValueAtTime(0.0001, temps + 0.05);
+  choc.connect(aigu).connect(gChoc).connect(busBanjo);
+  choc.start(temps);
+  choc.stop(temps + 0.07);
+
+  for (const [mult, poids] of PARTIELS) {
+    if (freq * mult > 15000) continue;          // inaudible, autant l'économiser
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    // Léger battement entre les partiels : la cloche « tourne » en s'éteignant.
+    o.frequency.value = freq * mult * (1 + (Math.random() - 0.5) * 0.002);
+    const g = ctx.createGain();
+    // Les partiels hauts meurent les premiers : la cloche s'assombrit en traînant.
+    const queue = duree * (0.35 + 0.65 / mult);
+    g.gain.setValueAtTime(0.0001, temps);
+    g.gain.exponentialRampToValueAtTime(niveau * poids, temps + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, temps + queue);
+    o.connect(g).connect(busBanjo);
+    o.start(temps);
+    o.stop(temps + queue + 0.05);
+  }
+}
+
+// Grelots de traîneau : bruit très aigu, résonant, et une attaque sèche. On en
+// pose deux par frappe, légèrement décalés — un grelot seul sonne faux.
+function grelots(temps, niveau = 0.2) {
+  for (let i = 0; i < 2; i++) {
+    const t = temps + i * 0.012;
+    const src = ctx.createBufferSource();
+    src.buffer = bufferSouffle();
+    src.playbackRate.value = 1 + Math.random() * 0.5;
+    const resonance = ctx.createBiquadFilter();
+    resonance.type = 'bandpass';
+    resonance.frequency.value = 4200 + Math.random() * 2200;
+    resonance.Q.value = 7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(niveau * (i ? 0.6 : 1), t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+    src.connect(resonance).connect(g).connect(busBanjo);
+    src.start(t, Math.random() * 0.3);
+    src.stop(t + 0.15);
+  }
+}
+
+// Mélodie de carillon : une noire sur deux, en arpèges descendants puis
+// montants. Les nulls laissent les cloches résonner — c'est la traîne qui fait
+// le carillon, pas la densité de notes.
+const MOTIF_CARILLON = [4, null, 2, 3, null, 1, 2, null];
+const MOTIF_CARILLON_B = [3, 4, null, 3, 2, null, 1, null];
+
+function programmerCarillon(temps, dans, accord, basse) {
+  // Une croche sur deux, comme la flûte : la cloche a besoin d'air.
+  if (dans % 2 === 0) {
+    const mesurePaire = Math.floor(pas / 16) % 2 === 0;
+    const motif = mesurePaire ? MOTIF_CARILLON : MOTIF_CARILLON_B;
+    const degre = motif[(dans / 2) % motif.length];
+    if (degre !== null) {
+      const croche = 30 / bpm;
+      // La queue ne suit pas le tempo : même emballées, les cloches traînent.
+      const duree = Math.min(2.4, Math.max(1.2, croche * 7));
+      cloche(accord[degre] * 2, temps, duree, CARILLON_VOL * (dans % 8 === 0 ? 1 : 0.6));
+      // Doublure à l'octave sur les appuis : le grand bourdon du clocher.
+      if (dans === 0) cloche(accord[0], temps + 0.02, duree * 1.4, CARILLON_VOL * 0.45);
+    }
   }
 
+  // Grelots sur les contretemps : le trot du traîneau sous la mélodie.
+  if (dans % 4 === 2) grelots(temps, dans % 8 === 6 ? 0.22 : 0.14);
+  if (dans % 8 === 0) contrebasse(basse / 2, temps);   // pédale grave, très sourde
+}
+
+function programmerBanjo(temps, dans, accord, basse) {
   // Le roulement de banjo, une double-croche après l'autre.
   const note = accord[ROULEMENT[dans] % accord.length];
   const accent = dans % 4 === 0 ? 0.42 : 0.26;
@@ -288,6 +368,22 @@ function programmer(temps) {
   if (dans === 14 && Math.random() < 0.4) {                       // petite fioriture
     pincer(accord[4] * 2, temps + 0.02, 0.18);
   }
+}
+
+// Un niveau = un instrument. Tous lisent la même grille d'accords au même
+// tempo : on peut changer d'ambiance en pleine partie sans coupure.
+const AMBIANCES = {
+  banjo: programmerBanjo,
+  flute: programmerFlute,
+  carillon: programmerCarillon,
+};
+
+function programmer(temps) {
+  const mesure = Math.floor(pas / 16) % GRILLE.length;
+  const dans = pas % 16;
+  const { accord, basse } = GRILLE[mesure];
+
+  (AMBIANCES[ambiance] || programmerBanjo)(temps, dans, accord, basse);
 
   pas++;
 }
@@ -943,11 +1039,11 @@ export function demarrerMusique() {
   reveillerAudio();
 }
 
-// Accompagnement du niveau : le banjo de la plaine, ou la flûte de pan du
-// désert. Le tempo, la grille d'accords et l'emballement restent les mêmes :
-// seul l'instrument change, sans coupure.
+// Accompagnement du niveau : un instrument par décor (voir AMBIANCES). Le
+// tempo, la grille d'accords et l'emballement restent les mêmes : seul
+// l'instrument change, sans coupure.
 export function setAmbianceMusicale(nom) {
-  ambiance = nom === 'flute' ? 'flute' : 'banjo';
+  ambiance = AMBIANCES[nom] ? nom : 'banjo';
 }
 
 // Tension : part des blindés effectivement présents dans le cadre, de 0 à 1.

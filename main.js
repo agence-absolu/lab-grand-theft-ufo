@@ -376,7 +376,7 @@ const NIVEAUX = [
     decorRarete: 2.0,      // « quelques » sapins et rochers : deux fois moins qu'ailleurs
     bete: 'bonhomme',      // sur la banquise on enlève des bonshommes de neige
     densiteBete: 0.62,     // troupeau plus fourni : 1 bête par 0,62 × COW_DENSITE
-    musique: 'banjo',
+    musique: 'carillon',   // cloches et grelots : l'hiver a sa boîte à musique
   },
 ];
 
