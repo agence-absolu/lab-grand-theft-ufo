@@ -101,6 +101,9 @@ const DEGAT_DUREE  = 1.4;   // durée d'encaissement / invulnérabilité (s)
 const TEMPS_REF    = 120;   // au-delà, le bonus de rapidité est épuisé (s)
 const MALUS_TOUCHE = 0.08;  // pénalité de multiplicateur par missile encaissé
 const MALUS_MAX    = 0.6;   // pénalité cumulée maximale
+const COMBO_FENETRE = 1.8;  // délai de regroupement des abductions en combo (s)
+const COMBO_GEL     = 10.0; // durée du gel du multiplicateur sur un combo de deux (s)
+const COMBO_BONUS   = 0.2;  // bonus permanent de multiplicateur sur un combo de trois ou plus
 const ETOILES_MAX  = 5;     // niveau de recherche maximal
 const UFO_VIE_MAX  = 3;     // nombre de missiles encaissés avant destruction
 const VICT_MANOEUVRE = 0.9;  // durée de la petite manoeuvre avant décollage (s)
@@ -858,10 +861,19 @@ function majRecherche() {
 
 // Multiplicateur de points : prime à la rapidité, pénalité pour chaque missile
 // encaissé. Une vache enlevée tôt et sans dégât vaut le double de sa valeur.
+// Le chrono du multiplicateur est propre au niveau : chaque terrain s'ouvre
+// donc sur un ×2 plein, quels que soient les missiles déjà pris ailleurs.
+let tempsNiveau0 = 0;     // repère de départ du niveau sur le chrono général
+let tempsGele = 0;        // temps cumulé pendant lequel la baisse était gelée
+let gelMultiJusqua = 0;   // fin du gel en cours (chrono général)
+let bonusMulti = 0;       // bonus permanent acquis sur les gros combos
+let touchesNiveau = 0;    // missiles encaissés depuis le début du niveau
+
 function multiplicateur() {
-  const rapidite = 1 + Math.max(0, 1 - clock.elapsedTime / TEMPS_REF);
-  const degats = 1 - Math.min(MALUS_MAX, touches * MALUS_TOUCHE);
-  return Math.max(0.1, rapidite * degats);
+  const ecoule = Math.max(0, clock.elapsedTime - tempsNiveau0 - tempsGele);
+  const rapidite = 1 + Math.max(0, 1 - ecoule / TEMPS_REF);
+  const degats = 1 - Math.min(MALUS_MAX, touchesNiveau * MALUS_TOUCHE);
+  return Math.max(0.1, rapidite * degats + bonusMulti);
 }
 
 const elMulti = document.getElementById('score-multi');
@@ -874,6 +886,55 @@ function majMulti() {
   multiAffiche = txt;
   elMulti.textContent = txt;
   elMulti.classList.toggle('faible', m < 1);
+}
+
+// ------------------------------------------------------------------- combos
+// Les bêtes aspirées dans la même fenêtre de temps comptent pour un seul lot :
+// deux d'un coup doublent le gain et gèlent la baisse du multiplicateur, trois
+// ou plus le triplent et font monter le multiplicateur d'un cran définitif.
+let comboLot = [];        // valeurs des bêtes du lot en cours
+let comboEcheance = 0;    // chrono de résolution du lot
+
+function ajouterAuCombo(valeur, t) {
+  comboLot.push(valeur);
+  comboEcheance = t + COMBO_FENETRE;
+  // Le pop part dès que le palier est franchi, sans attendre la fermeture du
+  // lot : la récompense doit coller à la capture qui la déclenche. Un lot qui
+  // passe de deux à trois bêtes relance le pop sur le nouveau palier.
+  if (comboLot.length === 2 || comboLot.length === 3) montrerComboPop(comboLot.length);
+}
+
+function resoudreCombo(t) {
+  if (!comboLot.length) return;
+  const n = comboLot.length;
+  const prime = n >= 3 ? 3 : n === 2 ? 2 : 1;
+  const base = comboLot.reduce((a, b) => a + b, 0);
+  comboLot = [];
+  comboEcheance = 0;
+
+  // La prime de combo s'ajoute au multiplicateur courant, avant d'éventuelles
+  // bonifications : le lot est payé au tarif du moment où il s'achève.
+  const gagne = Math.max(1, Math.round(base * multiplicateur() * prime));
+  points += gagne;
+
+  if (n === 2) {
+    // Gel de la baisse : le temps qui passe ne ronge plus le multiplicateur.
+    gelMultiJusqua = Math.max(gelMultiJusqua, t) + COMBO_GEL;
+    montrerMessage(`Combo ×2 — multiplicateur gelé ${COMBO_GEL.toFixed(0)} s`, 2600);
+  } else if (n >= 3) {
+    bonusMulti += COMBO_BONUS;
+    montrerMessage(`Combo ×3 — multiplicateur +${COMBO_BONUS.toFixed(1)}`, 2600);
+  }
+
+  majScore(true, gagne);
+  majMulti();
+}
+
+// Avance le gel : tant qu'il court, le temps écoulé est retiré du chrono du
+// multiplicateur, qui reste donc à l'arrêt.
+function majCombo(t, dt) {
+  if (t < gelMultiJusqua) tempsGele += dt;
+  if (comboEcheance && t >= comboEcheance) resoudreCombo(t);
 }
 
 const elCaptures = document.getElementById('score-captures');
@@ -2425,6 +2486,180 @@ ufoPivot.add(ufoTilt);
 ufoTilt.add(ufo);
 scene.add(ufoPivot);
 
+// ------------------------------------------------ pop de combo (dans la scène)
+// Le « ×2 » / « ×3 » est un sprite accroché au-dessus de la soucoupe : il vit
+// dans le canvas, suit l'OVNI pendant l'abduction et profite de la perspective
+// (il grossit quand la caméra est proche). Le relief cartoon est peint une
+// fois pour toutes dans une texture — extrusion en diagonale, contour noir,
+// remplissage bleu — puis réutilisé à chaque combo.
+const COMBO_POP_DUREE  = 0.95;  // durée de vie du pop (s)
+const COMBO_POP_HAUT   = 3.2;   // hauteur au-dessus du pivot de la soucoupe
+const COMBO_POP_TAILLE = 5.0;   // envergure du sprite à l'échelle 1 (unités monde)
+
+const COMBO_TEX_W = 512;
+const COMBO_TEX_H = 384;
+const COMBO_EXTRUSION = 22;     // profondeur du relief, en pixels de texture
+const COMBO_CONTOUR   = 26;     // épaisseur du cerne noir, en pixels de texture
+
+function peindreCombo(txt) {
+  const cv = document.createElement('canvas');
+  cv.width = COMBO_TEX_W; cv.height = COMBO_TEX_H;
+  const ctx = cv.getContext('2d');
+  // La marge laisse la place au contour et à l'extrusion, qui débordent du
+  // gabarit du texte.
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Le gabarit est ajusté au glyphe : la marge doit absorber le cerne et
+  // l'extrusion, sinon un « ×3 » un peu large serait rogné par la texture.
+  const marge = COMBO_CONTOUR / 2 + COMBO_EXTRUSION + 4;
+  let taille = 190;
+  ctx.font = `400 ${taille}px "Freckle Face", cursive`;
+  const large = ctx.measureText(txt).width;
+  const dispo = COMBO_TEX_W - marge * 2;
+  if (large > dispo) {
+    taille = Math.floor(taille * dispo / large);
+    ctx.font = `400 ${taille}px "Freckle Face", cursive`;
+  }
+
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.miterLimit = 2;
+
+  const cx = COMBO_TEX_W / 2 - COMBO_EXTRUSION / 2;
+  const cy = COMBO_TEX_H / 2 - COMBO_EXTRUSION / 2;
+
+  // Tranche : le même glyphe répété en diagonale, du plus loin au plus près,
+  // entièrement noir — cerne compris, pour que la silhouette de la tranche
+  // colle exactement à celle de la face avant. Les copies se recouvrant d'un
+  // pixel, le volume est plein et sa tranche uniformément noire.
+  ctx.lineWidth = COMBO_CONTOUR;
+  ctx.strokeStyle = '#0a0d12';
+  ctx.fillStyle = '#0a0d12';
+  for (let i = COMBO_EXTRUSION; i >= 1; i--) {
+    ctx.strokeText(txt, cx + i, cy + i);
+    ctx.fillText(txt, cx + i, cy + i);
+  }
+
+  // Face avant : même cerne noir, puis remplissage bleu. Un léger dégradé
+  // vertical décolle la face de la tranche et donne la lumière du haut.
+  ctx.strokeText(txt, cx, cy);
+  const grad = ctx.createLinearGradient(0, cy - 110, 0, cy + 110);
+  grad.addColorStop(0, '#4b92ff');
+  grad.addColorStop(0.55, '#1f6dff');
+  grad.addColorStop(1, '#0f54e6');
+  ctx.fillStyle = grad;
+  ctx.fillText(txt, cx, cy);
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  return tex;
+}
+
+// Les textures sont peintes à la demande, et seulement une fois la police
+// chargée : sans elle, le canvas tomberait sur la cursive de secours.
+const comboTextures = new Map();
+let comboPoliceLue = false;
+if (document.fonts?.load) {
+  document.fonts.load('400 190px "Freckle Face"')
+    .then(() => { comboPoliceLue = true; })
+    .catch(() => { comboPoliceLue = true; });
+} else {
+  comboPoliceLue = true;
+}
+
+function textureCombo(prime) {
+  if (!comboTextures.has(prime)) comboTextures.set(prime, peindreCombo(`×${prime}`));
+  return comboTextures.get(prime);
+}
+
+const comboPop = new THREE.Sprite(new THREE.SpriteMaterial({
+  transparent: true,
+  depthTest: false,     // toujours lisible, même si la soucoupe passe devant
+  depthWrite: false,
+  opacity: 0,
+}));
+comboPop.center.set(0.5, 0.5);
+comboPop.renderOrder = 20;
+comboPop.visible = false;
+comboPop.scale.set(COMBO_POP_TAILLE, COMBO_POP_TAILLE * COMBO_TEX_H / COMBO_TEX_W, 1);
+scene.add(comboPop);
+
+let comboPopAge = -1;   // < 0 : aucun pop en cours
+
+// Ancre le sprite sur la soucoupe. Appelé au déclenchement puis à chaque
+// image : sans la pose initiale, le pop s'afficherait à l'origine du monde le
+// temps d'une frame — ou pour toute sa vie si l'envolée de fin de niveau
+// démarre dans la même image que lui.
+function ancrerComboPop() {
+  comboPop.position.set(
+    ufoPivot.position.x,
+    ufoPivot.position.y + COMBO_POP_HAUT,
+    ufoPivot.position.z,
+  );
+}
+
+function montrerComboPop(prime) {
+  if (!comboPoliceLue) return;      // la police n'est pas encore là, on s'abstient
+  comboPop.material.map = textureCombo(prime);
+  comboPop.material.needsUpdate = true;
+  comboPopAge = 0;
+  comboPop.material.opacity = 0;
+  ancrerComboPop();
+  comboPop.visible = true;
+}
+
+// Courbe de jaillissement : bond au-delà de la taille cible, rebond, pause,
+// puis fuite en vrille. Les paliers reprennent ceux d'une animation cartoon.
+function comboPopEtat(k) {
+  // Échelle : overshoot puis rebond amorti vers 1.
+  let ech;
+  if (k < 0.18)      ech = THREE.MathUtils.lerp(0.1, 1.3, k / 0.18);
+  else if (k < 0.30) ech = THREE.MathUtils.lerp(1.3, 0.92, (k - 0.18) / 0.12);
+  else if (k < 0.40) ech = THREE.MathUtils.lerp(0.92, 1.06, (k - 0.30) / 0.10);
+  else if (k < 0.52) ech = THREE.MathUtils.lerp(1.06, 1.0, (k - 0.40) / 0.12);
+  else               ech = THREE.MathUtils.lerp(1.0, 0.05, Math.pow((k - 0.52) / 0.48, 1.6));
+
+  // Rotation : léger balancement d'arrivée, puis la vrille de sortie.
+  let rot;
+  if (k < 0.18)      rot = THREE.MathUtils.lerp(-0.49, 0.12, k / 0.18);
+  else if (k < 0.52) rot = THREE.MathUtils.lerp(0.12, 0, (k - 0.18) / 0.34);
+  else               rot = THREE.MathUtils.lerp(0, 5.2, Math.pow((k - 0.52) / 0.48, 1.8));
+
+  // Opacité : apparition immédiate, disparition sur le dernier quart.
+  const op = k < 0.1 ? k / 0.1 : k > 0.75 ? Math.max(0, 1 - (k - 0.75) / 0.25) : 1;
+
+  return { ech, rot, op };
+}
+
+// Suivi de la soucoupe : le sprite est repositionné à chaque image, il reste
+// donc accroché à l'OVNI pendant toute l'abduction.
+function majComboPop(dt) {
+  if (comboPopAge < 0) return;
+  comboPopAge += dt;
+  const k = comboPopAge / COMBO_POP_DUREE;
+  if (k >= 1) {
+    comboPopAge = -1;
+    comboPop.visible = false;
+    comboPop.material.opacity = 0;
+    return;
+  }
+  const { ech, rot, op } = comboPopEtat(k);
+  // Le pop suit la soucoupe tant qu'elle est pilotée. Dès l'envolée de fin de
+  // niveau, l'ancre est lâchée : l'OVNI fonce vers la caméra, le sprite
+  // l'aurait suivi hors champ. Il finit donc sa vrille là où il est né.
+  if (victoire < 0) ancrerComboPop();
+  comboPop.scale.set(
+    COMBO_POP_TAILLE * ech,
+    COMBO_POP_TAILLE * ech * COMBO_TEX_H / COMBO_TEX_W,
+    1,
+  );
+  comboPop.material.rotation = rot;
+  comboPop.material.opacity = op;
+}
+
 // Ombre portée "fake" au sol. Un disque plat s'enfonce dans le relief et
 // n'apparaît qu'à moitié : la géométrie est donc un disque subdivisé dont
 // chaque sommet est replaqué sur la hauteur du terrain à chaque frame.
@@ -2645,6 +2880,7 @@ function encaisser() {
   if (clock.elapsedTime < degatsJusqua) return;   // déjà en train d'absorber
   degatsJusqua = clock.elapsedTime + DEGAT_DUREE;
   touches++;
+  touchesNiveau++;
   ufoVie--;
   majScore(false);
   majBarreVie();
@@ -2652,6 +2888,7 @@ function encaisser() {
 }
 
 function detruireUfo() {
+  resoudreCombo(clock.elapsedTime);   // le dernier lot est payé avant la chute
   arreterMusique(1.2);
   arreterTemple();
   templeEnCours = -1;
@@ -3011,6 +3248,7 @@ function animate() {
 
   if (ufoDetruit) {                 // plus rien à piloter : la scène continue
     for (const tk of tanks) tk.jauge.visible = false;
+    majComboPop(dt);
     majSecousse(dt);
     majMissiles(dt);
     majExplosions(dt);
@@ -3021,6 +3259,7 @@ function animate() {
 
   if (victoire >= 0) {              // la partie est gagnée : la soucoupe s'en va
     majVictoire(t, dt);
+    majComboPop(dt);                // le combo des dernières bêtes doit se voir
     majSecousse(dt);
     majMissiles(dt);
     majExplosions(dt);
@@ -3276,6 +3515,8 @@ function animate() {
   majExplosions(dt);
   majSecousse(dt);
   majDegats(t);
+  majCombo(t, dt);
+  majComboPop(dt);
   majMulti();
 
   // --- temples : le faisceau tenu sur un sanctuaire le fait résonner, puis
@@ -3366,12 +3607,15 @@ function animate() {
       j.visible = false;
       capturees++;
       capturesNiveau++;
-      // Valeur de la bête, pondérée par la rapidité et les dégâts encaissés.
-      const gagne = Math.max(1, Math.round(d.points * multiplicateur()));
-      points += gagne;
-      majScore(true, gagne);
+      // Le gain n'est pas encaissé tout de suite : les bêtes aspirées coup sur
+      // coup forment un combo, dont la prime s'applique à l'ensemble du lot.
+      ajouterAuCombo(d.points, t);
+      majScore(false);
       majRecherche();
-      if (!vachesGroup.children.some((c) => !c.userData.abduite)) declencherVictoire(t);
+      if (!vachesGroup.children.some((c) => !c.userData.abduite)) {
+        resoudreCombo(t);
+        declencherVictoire(t);
+      }
     }
   }
 
@@ -3483,6 +3727,16 @@ function remettreEnVol() {
 // niveau a sa graine, donc son troupeau, ses blindés et son décor.
 function appliquerNiveau(n) {
   niveauJeu = THREE.MathUtils.clamp(n, 0, NIVEAUX.length - 1);
+  // Le multiplicateur repart à ×2 : nouveau repère de chrono, compteur de
+  // dégâts et gel remis à zéro. Le bonus de combo, lui, est acquis.
+  tempsNiveau0 = clock.elapsedTime;
+  tempsGele = 0;
+  gelMultiJusqua = 0;
+  touchesNiveau = 0;
+  comboLot = [];
+  comboEcheance = 0;
+  comboPopAge = -1;
+  comboPop.visible = false;
   grainNiveau = niveauJeu * 7919;
   // Affiché avant de peupler le terrain : le placement des temples mesure
   // l'interface pour ne rien poser dessous, et ce bandeau en fait partie.
@@ -3566,6 +3820,7 @@ function nouvellePartie() {
   points = 0;
   capturees = 0;
   touches = 0;
+  bonusMulti = 0;
 
   // --- soucoupe, faisceau, projectiles, étoiles
   remettreEnVol();
@@ -3578,6 +3833,7 @@ function nouvellePartie() {
   majMulti();
 
   clock.start();          // chrono et multiplicateur repartent de zéro
+  tempsNiveau0 = 0;       // appliquerNiveau a lu l'ancien chrono, on recale
   reprendreMusique();
   setTensionMusique(0);
   demarre = true;
