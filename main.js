@@ -201,15 +201,36 @@ function afficherAccueil() {
   setTensionMusique(0);
   demarrerMusique();
 
-  document.getElementById('demarrer').addEventListener('click', lancerPartie, { once: true });
+  document.getElementById('demarrer').addEventListener('click', ouvrirTuto, { once: true });
 }
+
+// Entre l'écran-titre et la partie : la consigne de prise en main, plein écran.
+// Le monde tourne déjà derrière, mais rien ne démarre tant que le joueur n'a
+// pas confirmé. On peut la relire plus tard depuis le menu de pause.
+const elTuto = () => document.getElementById('tuto');
+function ouvrirTuto() {
+  const accueil = document.getElementById('accueil');
+  accueil.classList.add('parti');
+  setTimeout(() => { accueil.hidden = true; }, 450);
+
+  const tuto = elTuto();
+  tuto.hidden = false;
+  // Une image d'écart avant la classe : sans cela la transition n'a pas d'état
+  // de départ et le panneau apparaît d'un bloc.
+  requestAnimationFrame(() => tuto.classList.add('affiche'));
+  document.getElementById('tuto-ok').focus();
+}
+
+document.getElementById('tuto-ok').addEventListener('click', () => {
+  const tuto = elTuto();
+  tuto.classList.remove('affiche');
+  tuto.hidden = true;
+  lancerPartie();
+});
 
 function lancerPartie() {
   demarrerMusique();   // déjà lancé sous l'écran-titre ; cet appel ne fait que
                        // réveiller le contexte si le navigateur l'avait suspendu
-  const accueil = document.getElementById('accueil');
-  accueil.classList.add('parti');
-  setTimeout(() => { accueil.hidden = true; }, 450);
   clock.start();        // chrono remis à zéro : ni chargement ni accueil comptés
   demarre = true;
 }
@@ -519,7 +540,7 @@ function construirePyramide(scl, couleur) {
 // fraction d'un écran de poche et d'un moniteur, et les media queries la
 // déplacent. Recalculée à chaque construction du monde, donc à chaque
 // redimensionnement.
-const UI_SELECTEURS = ['#vie', '#recherche', '#temples', '#score', '.hint', '#son'];
+const UI_SELECTEURS = ['#temples', '#score', '#son', '.console'];
 let zonesUI = [];
 
 function boiteEnNdc(el) {
@@ -857,7 +878,6 @@ function majMulti() {
 
 const elCaptures = document.getElementById('score-captures');
 const elGain = document.getElementById('score-gain');
-const elTouches = document.getElementById('score-touches');
 let capturees = 0;
 let capturesNiveau = 0;   // compteur remis à zéro à chaque niveau : étoiles et renforts
 let points = 0;
@@ -866,8 +886,9 @@ let vachesTotal = 0;      // effectif du troupeau, référence des vagues de cha
 
 function majScore(pop, gain) {
   elValeur.textContent = points;
-  elCaptures.textContent = capturees;
-  elTouches.textContent = touches;
+  // Compteur de bétail : ce qu'il reste à enlever, pas ce qui est déjà pris.
+  elCaptures.textContent = Math.max(0,
+    vachesGroup.children.filter((c) => !c.userData.abduite).length);
   if (!pop) return;
   elGain.textContent = `+${gain}`;
   elScore.classList.remove('pop');
@@ -2129,7 +2150,6 @@ function declencherVictoire(t) {
   halo.visible = false;
   tache.visible = false;
   haloLight.intensity = 0;
-  document.querySelector('.hint').hidden = true;
 }
 
 function majVictoire(t, dt) {
@@ -2391,7 +2411,7 @@ addEventListener('touchmove', (e) => { if (!enPause && e.touches[0]) majCible(e.
 
 // Consigne d'accueil, selon le pointeur en face.
 if (tactile) {
-  document.querySelector('.hint').textContent =
+  document.getElementById('tuto-texte').textContent =
     'Faites glisser le pouce — la soucoupe suit le doigt · maintenez pour allumer le faisceau';
 }
 
@@ -2648,7 +2668,6 @@ function detruireUfo() {
   haloLight.intensity = 0;
   majBarreVie();
   elVie.classList.remove('critique');
-  document.querySelector('.hint').hidden = true;
   // L'écran de fin arrive une fois la boule de feu bien installée : le bandeau
   // clignotant d'abord, puis le même récapitulatif que pour une victoire —
   // décompte des points, signature et tableau d'honneur.
@@ -3536,7 +3555,6 @@ function nouvellePartie() {
   // précédente réapparaîtraient un instant à la prochaine victoire.
   document.getElementById('classement-liste').replaceChildren();
   scoreDuTour = null;
-  document.querySelector('.hint').hidden = false;
   const voile = elTransition();
   clearTimeout(minuteurNiveau);
   voile.hidden = true;
@@ -3572,6 +3590,7 @@ function nouvellePartie() {
 const elMenu = document.getElementById('menu');
 const elMenuPrincipal = document.getElementById('menu-principal');
 const elMenuScores = document.getElementById('menu-vue-scores');
+const elMenuTuto = document.getElementById('menu-vue-tuto');
 let enPause = false;
 
 // La pause n'a de sens que manette en main : ni sous l'écran-titre, ni sur les
@@ -3605,6 +3624,7 @@ function fermerMenu() {
 function montrerVueMenu(vue) {
   elMenuPrincipal.hidden = vue !== 'principal';
   elMenuScores.hidden = vue !== 'scores';
+  elMenuTuto.hidden = vue !== 'tuto';
 }
 
 async function afficherScoresMenu() {
@@ -3643,14 +3663,23 @@ document.getElementById('menu-recommencer').addEventListener('click', () => {
   fermerMenu();
   nouvellePartie();
 });
+document.getElementById('menu-tuto').addEventListener('click', () => {
+  // Le texte est recopié depuis le tuto : il varie selon le pointeur en face,
+  // et une seule source évite que les deux versions divergent.
+  document.getElementById('menu-tuto-texte').textContent =
+    document.getElementById('tuto-texte').textContent;
+  montrerVueMenu('tuto');
+  document.getElementById('menu-tuto-retour').focus();
+});
+document.getElementById('menu-tuto-retour').addEventListener('click', () => montrerVueMenu('principal'));
 document.getElementById('menu-scores').addEventListener('click', afficherScoresMenu);
 document.getElementById('menu-retour').addEventListener('click', () => montrerVueMenu('principal'));
 
 addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return;
   if (!enPause) { ouvrirMenu(); return; }
-  // Depuis la liste des scores, Échap revient d'abord au menu.
-  if (!elMenuScores.hidden) montrerVueMenu('principal');
+  // Depuis une vue secondaire (scores, commandes), Échap revient d'abord au menu.
+  if (!elMenuScores.hidden || !elMenuTuto.hidden) montrerVueMenu('principal');
   else fermerMenu();
 });
 
@@ -3686,7 +3715,7 @@ if (import.meta.env.DEV) {
   const barre = document.createElement('div');
   barre.id = 'debug-niveaux';
   barre.style.cssText = `
-    position: fixed; right: 74px; bottom: 18px; z-index: 6;
+    position: fixed; right: 94px; bottom: calc(var(--console-h) * .08 + 12px); z-index: 6;
     display: flex; align-items: center; gap: 6px;
     padding: 4px 4px 4px 10px; border-radius: 999px;
     background: rgba(255, 255, 255, .62); backdrop-filter: blur(6px);
